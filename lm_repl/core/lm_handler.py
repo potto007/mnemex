@@ -5,11 +5,14 @@ Uses a multi-threaded socket server. Protocol: 4-byte length prefix + JSON paylo
 """
 
 import asyncio
+import hashlib
 import time
+from pathlib import Path
 from socketserver import StreamRequestHandler, ThreadingTCPServer
 from threading import Thread
 
 from lm_repl.clients.base_lm import BaseLM
+from lm_repl.clients.coordination import CrossProcessGate
 from lm_repl.clients.scheduler import RequestScheduler
 from lm_repl.core.comms_utils import LMRequest, LMResponse, socket_recv, socket_send
 from lm_repl.core.types import RLMChatCompletion, UsageSummary
@@ -148,6 +151,7 @@ class LMHandler:
         batch_max_concurrent: int = 16,
         scheduler_max_concurrent: int | None = None,
         scheduler_aging_interval: float | None = 30.0,
+        scheduler_coordination_dir: str | Path | None = None,
     ):
         self.default_client = client
         self.other_backend_client = other_backend_client
@@ -164,11 +168,25 @@ class LMHandler:
         # None disables scheduling entirely (previous behavior).
         # scheduler_aging_interval: seconds of queue wait worth one priority level
         # (anti-starvation); None disables aging.
+        # scheduler_coordination_dir: opt-in cross-process gate extending p1
+        # exclusivity to other OS processes targeting the same base_url
+        # (lock files keyed by sha256(base_url)). Requires the scheduler.
+        if scheduler_coordination_dir is not None and scheduler_max_concurrent is None:
+            raise ValueError(
+                "scheduler_coordination_dir requires scheduler_max_concurrent "
+                "(no scheduler, no cross-process gate)"
+            )
         self.scheduler: RequestScheduler | None = None
         if scheduler_max_concurrent is not None:
+            gate = None
+            if scheduler_coordination_dir is not None:
+                key_src = str(getattr(client, "base_url", None) or "default")
+                server_key = hashlib.sha256(key_src.encode()).hexdigest()[:16]
+                gate = CrossProcessGate(scheduler_coordination_dir, server_key)
             self.scheduler = RequestScheduler(
                 max_concurrent=scheduler_max_concurrent,
                 aging_interval=scheduler_aging_interval,
+                gate=gate,
             )
             for c in (client, other_backend_client):
                 if c is not None and hasattr(c, "scheduler"):

@@ -1,6 +1,7 @@
 import time
 from collections.abc import Callable
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 
 from lm_repl.clients import BaseLM, get_client
@@ -72,6 +73,7 @@ class RLM:
         max_concurrent_subcalls: int = 4,
         scheduler_max_concurrent: int | None = None,
         scheduler_aging_interval: float | None = 30.0,
+        scheduler_coordination_dir: str | Path | None = None,
         on_subcall_start: Callable[[int, str, str], None] | None = None,
         on_subcall_complete: Callable[[int, str, float, str | None], None] | None = None,
         on_iteration_start: Callable[[int, int], None] | None = None,
@@ -116,6 +118,10 @@ class RLM:
                 p2-p5 requests (anti-starvation aging: an old "low" eventually outranks a
                 fresh "high"). None disables aging. Only used when scheduler_max_concurrent
                 is set. Default 30.0.
+            scheduler_coordination_dir: If set (with scheduler_max_concurrent), directory of
+                cross-process lock files extending contention-retry (p1) exclusivity across
+                OS processes that target the same server. Opt-in; same host only. None
+                (default) keeps coordination in-process.
             on_subcall_start: Callback fired when a child RLM starts. Args: (depth, model, prompt_preview).
             on_subcall_complete: Callback fired when a child RLM completes. Args: (depth, model, duration, error_or_none).
             on_iteration_start: Callback fired when an iteration starts. Args: (depth, iteration_num).
@@ -149,6 +155,7 @@ class RLM:
         self.max_concurrent_subcalls = max_concurrent_subcalls
         self.scheduler_max_concurrent = scheduler_max_concurrent
         self.scheduler_aging_interval = scheduler_aging_interval
+        self.scheduler_coordination_dir = scheduler_coordination_dir
 
         self.depth = depth
         self.max_depth = max_depth
@@ -225,6 +232,7 @@ class RLM:
             other_backend_client=other_backend_client,
             scheduler_max_concurrent=self.scheduler_max_concurrent,
             scheduler_aging_interval=self.scheduler_aging_interval,
+            scheduler_coordination_dir=self.scheduler_coordination_dir,
         )
 
         # Register other clients to be available as sub-call options (by model name).

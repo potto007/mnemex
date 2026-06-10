@@ -1010,3 +1010,56 @@ def test_no_gate_means_no_gate_calls():
     s.acquire(Priority.NORMAL)
     s.release(Priority.NORMAL)
     assert s.active == 0
+
+
+# =============================================================================
+# Coordination plumbing (LMHandler / RLM)
+# =============================================================================
+
+
+def _make_url_client(base_url="http://127.0.0.1:8080/v1"):
+    with patch("lm_repl.clients.openai.openai.OpenAI"):
+        with patch("lm_repl.clients.openai.openai.AsyncOpenAI"):
+            return OpenAIClient(api_key="test", model_name="test-model", base_url=base_url)
+
+
+def test_lmhandler_builds_gate_keyed_by_base_url(tmp_path):
+    import hashlib
+
+    h = LMHandler(
+        _make_url_client(),
+        scheduler_max_concurrent=4,
+        scheduler_coordination_dir=tmp_path,
+    )
+    assert h.scheduler is not None
+    assert h.scheduler._gate is not None
+    key = hashlib.sha256(b"http://127.0.0.1:8080/v1").hexdigest()[:16]
+    assert (tmp_path / f"{key}.gate").exists()
+    assert (tmp_path / f"{key}.pool").exists()
+
+
+def test_lmhandler_no_dir_no_gate():
+    h = LMHandler(_make_url_client(), scheduler_max_concurrent=4)
+    assert h.scheduler is not None
+    assert h.scheduler._gate is None
+
+
+def test_coordination_dir_requires_scheduler(tmp_path):
+    with pytest.raises(ValueError, match="scheduler_max_concurrent"):
+        LMHandler(_make_url_client(), scheduler_coordination_dir=tmp_path)
+
+
+def test_openai_client_stores_base_url():
+    client = _make_url_client()
+    assert client.base_url == "http://127.0.0.1:8080/v1"
+
+
+def test_rlm_stores_coordination_dir(tmp_path):
+    from lm_repl.core.rlm import RLM
+
+    rlm = RLM(
+        backend_kwargs={"model_name": "m", "api_key": "x"},
+        scheduler_max_concurrent=4,
+        scheduler_coordination_dir=tmp_path,
+    )
+    assert rlm.scheduler_coordination_dir == tmp_path
