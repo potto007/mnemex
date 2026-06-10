@@ -3,8 +3,8 @@
 from collections.abc import Callable
 from typing import Any
 
-from rlm.clients.base_lm import BaseLM
-from rlm.core.types import ModelUsageSummary, UsageSummary
+from lm_repl.clients.base_lm import BaseLM
+from lm_repl.core.types import ModelUsageSummary, UsageSummary
 
 
 class MockLM(BaseLM):

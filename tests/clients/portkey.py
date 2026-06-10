@@ -1,6 +1,6 @@
 from dotenv import load_dotenv
 
-from rlm.clients.portkey import PortkeyClient
+from lm_repl.clients.portkey import PortkeyClient
 
 load_dotenv()
 

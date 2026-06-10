@@ -1,6 +1,6 @@
 """Tests for core types."""
 
-from rlm.core.types import (
+from lm_repl.core.types import (
     CodeBlock,
     ModelUsageSummary,
     QueryMetadata,

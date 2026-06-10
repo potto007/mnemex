@@ -18,8 +18,8 @@ import pytest
 
 pytest.importorskip("IPython")
 
-from rlm.core.types import ModelUsageSummary, REPLResult, RLMChatCompletion, UsageSummary
-from rlm.environments.ipython_repl import IPythonREPL
+from lm_repl.core.types import ModelUsageSummary, REPLResult, RLMChatCompletion, UsageSummary
+from lm_repl.environments.ipython_repl import IPythonREPL
 
 # -----------------------------------------------------------------------------
 # Helpers
@@ -374,7 +374,7 @@ def test_cleanup_is_idempotent(kernel_mode: str):
 
 @BOTH_MODES
 def test_persistent_env_exposes_protocol(kernel_mode: str):
-    from rlm.environments import SupportsPersistence
+    from lm_repl.environments import SupportsPersistence
 
     with IPythonREPL(kernel_mode=kernel_mode, persistent=True) as repl:
         assert isinstance(repl, SupportsPersistence)
@@ -461,7 +461,7 @@ def test_in_process_persistent_multi_turn_variables():
 
 
 def test_get_environment_routes_ipython():
-    from rlm.environments import get_environment
+    from lm_repl.environments import get_environment
 
     env = get_environment("ipython", {"kernel_mode": "in_process"})
     try:
@@ -474,7 +474,7 @@ def test_get_environment_routes_ipython():
 
 @pytest.mark.skipif(not _has_subprocess, reason="jupyter_client not installed")
 def test_get_environment_routes_ipython_subprocess():
-    from rlm.environments import get_environment
+    from lm_repl.environments import get_environment
 
     env = get_environment("ipython", {"kernel_mode": "subprocess"})
     try:
@@ -487,7 +487,7 @@ def test_get_environment_routes_ipython_subprocess():
 
 def test_ipython_repl_importable_from_package():
     """``IPythonREPL`` is in ``__all__`` and must be importable lazily."""
-    from rlm.environments import IPythonREPL as Imported
+    from lm_repl.environments import IPythonREPL as Imported
 
     assert Imported is IPythonREPL
 

@@ -10,9 +10,9 @@ Tests for the parameter propagation to child RLM instances:
 import time
 from unittest.mock import Mock, patch
 
-import rlm.core.rlm as rlm_module
-from rlm import RLM
-from rlm.core.types import ModelUsageSummary, UsageSummary
+import lm_repl.core.rlm as rlm_module
+from lm_repl import RLM
+from lm_repl.core.types import ModelUsageSummary, UsageSummary
 
 
 def create_mock_lm(responses: list[str], model_name: str = "mock-model") -> Mock:

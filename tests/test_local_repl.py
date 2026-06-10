@@ -2,7 +2,7 @@
 
 import os
 
-from rlm.environments.local_repl import LocalREPL
+from lm_repl.environments.local_repl import LocalREPL
 
 
 class TestLocalREPLBasic:

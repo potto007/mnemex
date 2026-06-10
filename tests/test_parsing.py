@@ -1,8 +1,8 @@
 """Tests for parsing utilities."""
 
-from rlm.core.types import CodeBlock, REPLResult, RLMIteration
-from rlm.environments.local_repl import LocalREPL
-from rlm.utils.parsing import (
+from lm_repl.core.types import CodeBlock, REPLResult, RLMIteration
+from lm_repl.environments.local_repl import LocalREPL
+from lm_repl.utils.parsing import (
     convert_context_for_repl,
     find_code_blocks,
     format_execution_result,

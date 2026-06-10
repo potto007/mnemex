@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from rlm import RLM
+from lm_repl import RLM
 
 
 @pytest.mark.skipif(

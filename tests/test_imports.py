@@ -1,6 +1,7 @@
 """Tests to verify all imports are correct and non-conflicting."""
 
 import importlib
+import subprocess
 import sys
 from collections import defaultdict
 
@@ -11,21 +12,21 @@ class TestTopLevelImports:
     """Test top-level package imports."""
 
     def test_rlm_import(self):
-        """Test that main rlm package can be imported."""
-        import rlm
+        """Test that main lm_repl package can be imported."""
+        import lm_repl
 
-        assert hasattr(rlm, "RLM")
-        assert "RLM" in rlm.__all__
+        assert hasattr(lm_repl, "RLM")
+        assert "RLM" in lm_repl.__all__
 
     def test_rlm_rlm_import(self):
-        """Test that RLM class can be imported from rlm."""
-        from rlm import RLM
+        """Test that RLM class can be imported from lm_repl."""
+        from lm_repl import RLM
 
         assert RLM is not None
 
     def test_rlm_core_rlm_import(self):
-        """Test that RLM can be imported from rlm.core.rlm."""
-        from rlm.core.rlm import RLM
+        """Test that RLM can be imported from lm_repl.core.rlm."""
+        from lm_repl.core.rlm import RLM
 
         assert RLM is not None
 
@@ -35,41 +36,41 @@ class TestClientImports:
 
     def test_clients_module_import(self):
         """Test that clients module can be imported."""
-        import rlm.clients
+        import lm_repl.clients
 
-        assert hasattr(rlm.clients, "get_client")
-        assert hasattr(rlm.clients, "BaseLM")
+        assert hasattr(lm_repl.clients, "get_client")
+        assert hasattr(lm_repl.clients, "BaseLM")
 
     def test_base_lm_import(self):
         """Test BaseLM import."""
-        from rlm.clients.base_lm import BaseLM
+        from lm_repl.clients.base_lm import BaseLM
 
         assert BaseLM is not None
 
     def test_openai_client_import(self):
         """Test OpenAIClient import."""
         pytest.importorskip("openai")
-        from rlm.clients.openai import OpenAIClient
+        from lm_repl.clients.openai import OpenAIClient
 
         assert OpenAIClient is not None
 
     def test_anthropic_client_import(self):
         """Test AnthropicClient import."""
         pytest.importorskip("anthropic")
-        from rlm.clients.anthropic import AnthropicClient
+        from lm_repl.clients.anthropic import AnthropicClient
 
         assert AnthropicClient is not None
 
     def test_portkey_client_import(self):
         """Test PortkeyClient import."""
         pytest.importorskip("portkey_ai")
-        from rlm.clients.portkey import PortkeyClient
+        from lm_repl.clients.portkey import PortkeyClient
 
         assert PortkeyClient is not None
 
     def test_get_client_function(self):
         """Test get_client function import."""
-        from rlm.clients import get_client
+        from lm_repl.clients import get_client
 
         assert callable(get_client)
 
@@ -79,7 +80,7 @@ class TestCoreImports:
 
     def test_core_types_import(self):
         """Test core types imports."""
-        from rlm.core.types import (
+        from lm_repl.core.types import (
             ClientBackend,
             CodeBlock,
             ModelUsageSummary,
@@ -101,19 +102,19 @@ class TestCoreImports:
 
     def test_core_rlm_import(self):
         """Test core RLM import."""
-        from rlm.core.rlm import RLM
+        from lm_repl.core.rlm import RLM
 
         assert RLM is not None
 
     def test_core_lm_handler_import(self):
         """Test LMHandler import."""
-        from rlm.core.lm_handler import LMHandler
+        from lm_repl.core.lm_handler import LMHandler
 
         assert LMHandler is not None
 
     def test_core_comms_utils_import(self):
         """Test comms_utils imports."""
-        from rlm.core.comms_utils import (
+        from lm_repl.core.comms_utils import (
             LMRequest,
             LMResponse,
             send_lm_request,
@@ -135,15 +136,15 @@ class TestEnvironmentImports:
 
     def test_environments_module_import(self):
         """Test that environments module can be imported."""
-        import rlm.environments
+        import lm_repl.environments
 
-        assert hasattr(rlm.environments, "get_environment")
-        assert hasattr(rlm.environments, "BaseEnv")
-        assert hasattr(rlm.environments, "LocalREPL")
+        assert hasattr(lm_repl.environments, "get_environment")
+        assert hasattr(lm_repl.environments, "BaseEnv")
+        assert hasattr(lm_repl.environments, "LocalREPL")
 
     def test_base_env_import(self):
         """Test BaseEnv import."""
-        from rlm.environments.base_env import BaseEnv, IsolatedEnv, NonIsolatedEnv
+        from lm_repl.environments.base_env import BaseEnv, IsolatedEnv, NonIsolatedEnv
 
         assert BaseEnv is not None
         assert IsolatedEnv is not None
@@ -151,33 +152,33 @@ class TestEnvironmentImports:
 
     def test_local_repl_import(self):
         """Test LocalREPL import."""
-        from rlm.environments.local_repl import LocalREPL
+        from lm_repl.environments.local_repl import LocalREPL
 
         assert LocalREPL is not None
 
     def test_modal_repl_import(self):
         """Test ModalREPL import."""
         pytest.importorskip("modal")
-        from rlm.environments.modal_repl import ModalREPL
+        from lm_repl.environments.modal_repl import ModalREPL
 
         assert ModalREPL is not None
 
     def test_docker_repl_import(self):
         """Test DockerREPL import."""
-        from rlm.environments.docker_repl import DockerREPL
+        from lm_repl.environments.docker_repl import DockerREPL
 
         assert DockerREPL is not None
 
     def test_prime_repl_import(self):
         """Test PrimeREPL import."""
         pytest.importorskip("prime_sandboxes")
-        from rlm.environments.prime_repl import PrimeREPL
+        from lm_repl.environments.prime_repl import PrimeREPL
 
         assert PrimeREPL is not None
 
     def test_get_environment_function(self):
         """Test get_environment function import."""
-        from rlm.environments import get_environment
+        from lm_repl.environments import get_environment
 
         assert callable(get_environment)
 
@@ -187,22 +188,22 @@ class TestLoggerImports:
 
     def test_logger_module_import(self):
         """Test that logger module can be imported."""
-        import rlm.logger
+        import lm_repl.logger
 
-        assert hasattr(rlm.logger, "RLMLogger")
-        assert hasattr(rlm.logger, "VerbosePrinter")
-        assert "RLMLogger" in rlm.logger.__all__
-        assert "VerbosePrinter" in rlm.logger.__all__
+        assert hasattr(lm_repl.logger, "RLMLogger")
+        assert hasattr(lm_repl.logger, "VerbosePrinter")
+        assert "RLMLogger" in lm_repl.logger.__all__
+        assert "VerbosePrinter" in lm_repl.logger.__all__
 
     def test_rlm_logger_import(self):
         """Test RLMLogger import."""
-        from rlm.logger.rlm_logger import RLMLogger
+        from lm_repl.logger.rlm_logger import RLMLogger
 
         assert RLMLogger is not None
 
     def test_verbose_import(self):
         """Test VerbosePrinter import."""
-        from rlm.logger.verbose import VerbosePrinter
+        from lm_repl.logger.verbose import VerbosePrinter
 
         assert VerbosePrinter is not None
 
@@ -212,7 +213,7 @@ class TestUtilsImports:
 
     def test_parsing_import(self):
         """Test parsing module import."""
-        from rlm.utils.parsing import (
+        from lm_repl.utils.parsing import (
             find_code_blocks,
             format_execution_result,
             format_iteration,
@@ -224,7 +225,7 @@ class TestUtilsImports:
 
     def test_prompts_import(self):
         """Test prompts module import."""
-        from rlm.utils.prompts import (
+        from lm_repl.utils.prompts import (
             RLM_SYSTEM_PROMPT,
             USER_PROMPT,
             build_rlm_system_prompt,
@@ -238,7 +239,7 @@ class TestUtilsImports:
 
     def test_rlm_utils_import(self):
         """Test rlm_utils module import."""
-        from rlm.utils.rlm_utils import filter_sensitive_keys
+        from lm_repl.utils.rlm_utils import filter_sensitive_keys
 
         assert callable(filter_sensitive_keys)
 
@@ -247,101 +248,96 @@ class TestImportConflicts:
     """Test for import conflicts and naming issues."""
 
     def test_no_duplicate_names_in_rlm_all(self):
-        """Test that __all__ in rlm.__init__ has no duplicates."""
-        import rlm
+        """Test that __all__ in lm_repl.__init__ has no duplicates."""
+        import lm_repl
 
-        if hasattr(rlm, "__all__"):
-            all_items = rlm.__all__
+        if hasattr(lm_repl, "__all__"):
+            all_items = lm_repl.__all__
             assert len(all_items) == len(set(all_items)), (
-                f"Duplicate items in rlm.__all__: {all_items}"
+                f"Duplicate items in lm_repl.__all__: {all_items}"
             )
 
     def test_no_duplicate_names_in_logger_all(self):
-        """Test that __all__ in rlm.logger.__init__ has no duplicates."""
-        import rlm.logger
+        """Test that __all__ in lm_repl.logger.__init__ has no duplicates."""
+        import lm_repl.logger
 
-        if hasattr(rlm.logger, "__all__"):
-            all_items = rlm.logger.__all__
+        if hasattr(lm_repl.logger, "__all__"):
+            all_items = lm_repl.logger.__all__
             assert len(all_items) == len(set(all_items)), (
-                f"Duplicate items in rlm.logger.__all__: {all_items}"
+                f"Duplicate items in lm_repl.logger.__all__: {all_items}"
             )
 
     def test_all_declarations_match_exports(self):
         """Test that __all__ declarations match actual exports."""
-        import rlm
-        import rlm.logger
+        import lm_repl
+        import lm_repl.logger
 
-        # Test rlm.__all__
-        if hasattr(rlm, "__all__"):
-            for name in rlm.__all__:
-                assert hasattr(rlm, name), f"rlm.__all__ declares '{name}' but it's not exported"
+        # Test lm_repl.__all__
+        if hasattr(lm_repl, "__all__"):
+            for name in lm_repl.__all__:
+                assert hasattr(lm_repl, name), f"lm_repl.__all__ declares '{name}' but it's not exported"
 
-        # Test rlm.logger.__all__
-        if hasattr(rlm.logger, "__all__"):
-            for name in rlm.logger.__all__:
-                assert hasattr(rlm.logger, name), (
-                    f"rlm.logger.__all__ declares '{name}' but it's not exported"
+        # Test lm_repl.logger.__all__
+        if hasattr(lm_repl.logger, "__all__"):
+            for name in lm_repl.logger.__all__:
+                assert hasattr(lm_repl.logger, name), (
+                    f"lm_repl.logger.__all__ declares '{name}' but it's not exported"
                 )
 
     def test_no_circular_imports(self):
-        """Test that modules can be imported without circular import errors."""
+        """Test that modules can be imported without circular import errors.
+
+        Runs in a SUBPROCESS so imports are genuinely fresh. Deleting entries
+        from sys.modules in-process and re-importing creates new class objects
+        while already-imported modules keep the old ones, breaking isinstance
+        checks for every test that runs afterwards."""
         # Core modules that should always be importable
         core_modules = [
-            "rlm",
-            "rlm.clients",
-            "rlm.clients.base_lm",
-            "rlm.core",
-            "rlm.core.types",
-            "rlm.core.rlm",
-            "rlm.core.lm_handler",
-            "rlm.core.comms_utils",
-            "rlm.environments",
-            "rlm.environments.base_env",
-            "rlm.environments.local_repl",
-            "rlm.environments.docker_repl",
-            "rlm.logger",
-            "rlm.logger.rlm_logger",
-            "rlm.logger.verbose",
-            "rlm.utils",
-            "rlm.utils.parsing",
-            "rlm.utils.prompts",
-            "rlm.utils.rlm_utils",
+            "lm_repl",
+            "lm_repl.clients",
+            "lm_repl.clients.base_lm",
+            "lm_repl.core",
+            "lm_repl.core.types",
+            "lm_repl.core.rlm",
+            "lm_repl.core.lm_handler",
+            "lm_repl.core.comms_utils",
+            "lm_repl.environments",
+            "lm_repl.environments.base_env",
+            "lm_repl.environments.local_repl",
+            "lm_repl.environments.docker_repl",
+            "lm_repl.logger",
+            "lm_repl.logger.rlm_logger",
+            "lm_repl.logger.verbose",
+            "lm_repl.utils",
+            "lm_repl.utils.parsing",
+            "lm_repl.utils.prompts",
+            "lm_repl.utils.rlm_utils",
         ]
 
-        # Optional modules that may not be available
+        # Optional modules imported only when their dependency is available
         optional_modules = [
-            ("rlm.clients.openai", "openai"),
-            ("rlm.clients.anthropic", "anthropic"),
-            ("rlm.clients.portkey", "portkey_ai"),
-            ("rlm.environments.modal_repl", "modal"),
-            ("rlm.environments.prime_repl", "prime_sandboxes"),
+            ("lm_repl.clients.openai", "openai"),
+            ("lm_repl.clients.anthropic", "anthropic"),
+            ("lm_repl.clients.portkey", "portkey_ai"),
+            ("lm_repl.environments.modal_repl", "modal"),
+            ("lm_repl.environments.prime_repl", "prime_sandboxes"),
         ]
 
-        # Test core modules
-        for module_name in core_modules:
-            # Remove from sys.modules if present to test fresh import
-            if module_name in sys.modules:
-                del sys.modules[module_name]
-            try:
-                importlib.import_module(module_name)
-            except ImportError as e:
-                pytest.fail(f"Failed to import {module_name}: {e}")
-
-        # Test optional modules (skip if dependency not available)
-        for module_name, dependency in optional_modules:
-            # Check if dependency is available
-            try:
-                importlib.import_module(dependency)
-            except ImportError:
-                continue  # Skip this module if dependency not available
-
-            # If dependency is available, test the module import
-            if module_name in sys.modules:
-                del sys.modules[module_name]
-            try:
-                importlib.import_module(module_name)
-            except ImportError as e:
-                pytest.fail(f"Failed to import {module_name}: {e}")
+        script = (
+            "import importlib\n"
+            f"for name in {core_modules!r}:\n"
+            "    importlib.import_module(name)\n"
+            f"for name, dep in {optional_modules!r}:\n"
+            "    try:\n"
+            "        importlib.import_module(dep)\n"
+            "    except ImportError:\n"
+            "        continue\n"
+            "    importlib.import_module(name)\n"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", script], capture_output=True, text=True
+        )
+        assert proc.returncode == 0, f"Circular/broken import:\n{proc.stderr}"
 
     def test_no_naming_conflicts_across_modules(self):
         """Test that there are no naming conflicts across different modules."""
@@ -349,35 +345,35 @@ class TestImportConflicts:
         module_exports: dict[str, set[str]] = {}
 
         # Check main modules
-        import rlm
-        import rlm.clients
-        import rlm.environments
-        import rlm.logger
+        import lm_repl
+        import lm_repl.clients
+        import lm_repl.environments
+        import lm_repl.logger
 
-        if hasattr(rlm, "__all__"):
-            module_exports["rlm"] = set(rlm.__all__)
+        if hasattr(lm_repl, "__all__"):
+            module_exports["lm_repl"] = set(lm_repl.__all__)
         else:
-            module_exports["rlm"] = {name for name in dir(rlm) if not name.startswith("_")}
+            module_exports["lm_repl"] = {name for name in dir(lm_repl) if not name.startswith("_")}
 
-        if hasattr(rlm.clients, "__all__"):
-            module_exports["rlm.clients"] = set(rlm.clients.__all__)
+        if hasattr(lm_repl.clients, "__all__"):
+            module_exports["lm_repl.clients"] = set(lm_repl.clients.__all__)
         else:
-            module_exports["rlm.clients"] = {
-                name for name in dir(rlm.clients) if not name.startswith("_")
+            module_exports["lm_repl.clients"] = {
+                name for name in dir(lm_repl.clients) if not name.startswith("_")
             }
 
-        if hasattr(rlm.environments, "__all__"):
-            module_exports["rlm.environments"] = set(rlm.environments.__all__)
+        if hasattr(lm_repl.environments, "__all__"):
+            module_exports["lm_repl.environments"] = set(lm_repl.environments.__all__)
         else:
-            module_exports["rlm.environments"] = {
-                name for name in dir(rlm.environments) if not name.startswith("_")
+            module_exports["lm_repl.environments"] = {
+                name for name in dir(lm_repl.environments) if not name.startswith("_")
             }
 
-        if hasattr(rlm.logger, "__all__"):
-            module_exports["rlm.logger"] = set(rlm.logger.__all__)
+        if hasattr(lm_repl.logger, "__all__"):
+            module_exports["lm_repl.logger"] = set(lm_repl.logger.__all__)
         else:
-            module_exports["rlm.logger"] = {
-                name for name in dir(rlm.logger) if not name.startswith("_")
+            module_exports["lm_repl.logger"] = {
+                name for name in dir(lm_repl.logger) if not name.startswith("_")
             }
 
         # Check for conflicts (same name in multiple modules)
@@ -423,7 +419,7 @@ class TestImportCompleteness:
 
     def test_all_client_classes_importable(self):
         """Test that all client classes can be imported."""
-        from rlm.clients.base_lm import BaseLM
+        from lm_repl.clients.base_lm import BaseLM
 
         # Verify BaseLM is a class
         assert isinstance(BaseLM, type)
@@ -431,7 +427,7 @@ class TestImportCompleteness:
         # Test optional client classes
         try:
             pytest.importorskip("openai")
-            from rlm.clients.openai import OpenAIClient
+            from lm_repl.clients.openai import OpenAIClient
 
             assert isinstance(OpenAIClient, type)
         except Exception:
@@ -439,7 +435,7 @@ class TestImportCompleteness:
 
         try:
             pytest.importorskip("anthropic")
-            from rlm.clients.anthropic import AnthropicClient
+            from lm_repl.clients.anthropic import AnthropicClient
 
             assert isinstance(AnthropicClient, type)
         except Exception:
@@ -447,7 +443,7 @@ class TestImportCompleteness:
 
         try:
             pytest.importorskip("portkey_ai")
-            from rlm.clients.portkey import PortkeyClient
+            from lm_repl.clients.portkey import PortkeyClient
 
             assert isinstance(PortkeyClient, type)
         except Exception:
@@ -455,9 +451,9 @@ class TestImportCompleteness:
 
     def test_all_environment_classes_importable(self):
         """Test that all environment classes can be imported."""
-        from rlm.environments.base_env import BaseEnv, IsolatedEnv, NonIsolatedEnv
-        from rlm.environments.docker_repl import DockerREPL
-        from rlm.environments.local_repl import LocalREPL
+        from lm_repl.environments.base_env import BaseEnv, IsolatedEnv, NonIsolatedEnv
+        from lm_repl.environments.docker_repl import DockerREPL
+        from lm_repl.environments.local_repl import LocalREPL
 
         # Verify they're all classes
         assert isinstance(BaseEnv, type)
@@ -469,7 +465,7 @@ class TestImportCompleteness:
         # Test optional ModalREPL
         try:
             pytest.importorskip("modal")
-            from rlm.environments.modal_repl import ModalREPL
+            from lm_repl.environments.modal_repl import ModalREPL
 
             assert isinstance(ModalREPL, type)
         except Exception:
@@ -478,7 +474,7 @@ class TestImportCompleteness:
         # Test optional PrimeREPL
         try:
             pytest.importorskip("prime_sandboxes")
-            from rlm.environments.prime_repl import PrimeREPL
+            from lm_repl.environments.prime_repl import PrimeREPL
 
             assert isinstance(PrimeREPL, type)
         except Exception:
