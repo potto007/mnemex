@@ -19,6 +19,7 @@ ordering stays in-process. Same-host processes only (flock does not span
 machines, and network filesystems are explicitly out of scope).
 """
 
+import asyncio
 import fcntl
 import logging
 import os
@@ -28,6 +29,11 @@ from pathlib import Path
 from lm_repl.clients.scheduler import Priority
 
 log = logging.getLogger(__name__)
+
+# Async acquisition polls LOCK_NB at this interval instead of blocking a
+# thread: a cancelled task cannot interrupt a blocking flock in an executor
+# thread, and that thread would eventually acquire a lock nobody releases.
+POLL_INTERVAL = 0.025
 
 
 class CrossProcessGate:
@@ -102,6 +108,41 @@ class CrossProcessGate:
                 os.close(gate_fd)
             with self._mu:
                 self._pool_fds.append(pool_fd)
+
+    async def aenter(self, priority: int) -> None:
+        """Async acquisition: LOCK_NB poll loop (POLL_INTERVAL) instead of a
+        blocking flock in an executor thread, so task cancellation can never
+        strand a lock in a thread nobody joins. On any failure, including
+        CancelledError, partial holds are released before re-raising."""
+        op = fcntl.LOCK_EX if priority == Priority.CONTENTION_RETRY else fcntl.LOCK_SH
+        gate_fd = self._open(self._gate_path)
+        try:
+            await self._apoll(gate_fd, op)
+            pool_fd = self._open(self._pool_path)
+            try:
+                await self._apoll(pool_fd, op)
+            except BaseException:
+                os.close(pool_fd)
+                raise
+        except BaseException:
+            os.close(gate_fd)
+            raise
+        if priority == Priority.CONTENTION_RETRY:
+            with self._mu:
+                self._p1_fds = (gate_fd, pool_fd)
+        else:
+            os.close(gate_fd)
+            with self._mu:
+                self._pool_fds.append(pool_fd)
+
+    @staticmethod
+    async def _apoll(fd: int, op: int) -> None:
+        while True:
+            try:
+                fcntl.flock(fd, op | fcntl.LOCK_NB)
+                return
+            except BlockingIOError:
+                await asyncio.sleep(POLL_INTERVAL)
 
     def exit(self, priority: int) -> None:
         """Release one acquisition. Never raises: it sits in finally paths,

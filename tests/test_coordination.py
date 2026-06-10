@@ -1,5 +1,6 @@
 """Tests for CrossProcessGate (two-flock gate+pool cross-process coordination)."""
 
+import asyncio
 import fcntl
 import multiprocessing as mp
 import os
@@ -171,3 +172,53 @@ def test_different_server_keys_do_not_couple(tmp_path):
     finally:
         release.set()
         child.join(15)
+
+
+# ---- async path ----
+
+def test_aenter_roundtrip(tmp_path):
+    async def main():
+        gate = CrossProcessGate(tmp_path, KEY)
+        await gate.aenter(Priority.NORMAL)
+        gate.exit(Priority.NORMAL)
+        await gate.aenter(Priority.CONTENTION_RETRY)
+        gate.exit(Priority.CONTENTION_RETRY)
+
+    asyncio.run(main())
+
+
+def test_aenter_p1_waits_for_share(tmp_path):
+    async def main():
+        gate = CrossProcessGate(tmp_path, KEY)
+        gate.enter(Priority.NORMAL)
+        task = asyncio.create_task(gate.aenter(Priority.CONTENTION_RETRY))
+        await asyncio.sleep(0.2)
+        assert not task.done()  # polling: pool SH still held
+        gate.exit(Priority.NORMAL)
+        await asyncio.wait_for(task, 5)
+        gate.exit(Priority.CONTENTION_RETRY)
+
+    asyncio.run(main())
+
+
+def test_aenter_cancellation_releases_partial(tmp_path):
+    async def main():
+        # Hold gate EX via a raw fd (flock conflicts across fds even within
+        # one process), so aenter(NORMAL) blocks polling at the doorway.
+        raw_fd = os.open(tmp_path / f"{KEY}.gate", os.O_RDWR | os.O_CREAT, 0o644)
+        fcntl.flock(raw_fd, fcntl.LOCK_EX)
+        gate = CrossProcessGate(tmp_path, KEY)
+        task = asyncio.create_task(gate.aenter(Priority.NORMAL))
+        await asyncio.sleep(0.2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert gate._pool_fds == []
+        assert gate._p1_fds is None
+        fcntl.flock(raw_fd, fcntl.LOCK_UN)
+        os.close(raw_fd)
+        # Gate still fully usable after the cancellation
+        await gate.aenter(Priority.CONTENTION_RETRY)
+        gate.exit(Priority.CONTENTION_RETRY)
+
+    asyncio.run(main())
