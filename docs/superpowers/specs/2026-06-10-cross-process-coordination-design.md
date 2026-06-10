@@ -37,8 +37,9 @@ configured. Nothing else in the codebase learns about file locks.
   `<dir>/<server_key>.gate` and `<dir>/<server_key>.pool`, where
   `server_key = sha256(base_url.encode()).hexdigest()[:16]`. Processes coordinate if and only if they
   target the same server.
-- API: `enter(priority)` / `exit(priority)` (blocking, sync path) and
-  `aenter(priority)` / `aexit(priority)` (async path). The gate distinguishes only
+- API: `enter(priority)` / `aenter(priority)` for acquisition (sync blocking /
+  async polling) and a single `exit(priority)` shared by both paths, since
+  releasing only closes fds and never blocks. The gate distinguishes only
   p1 vs everything else; it knows nothing about p2-p5.
 - `RequestScheduler` gains `gate: CrossProcessGate | None = None`.
   Acquire: local admission (unchanged logic), then `gate.enter(priority)`.
