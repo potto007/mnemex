@@ -13,7 +13,14 @@ Priority levels:
 
 Scheduling rules:
     - At most *max_concurrent* requests run simultaneously.
-    - While any p1 request is active, ONLY p1 requests may start.
+    - A p1 request runs ALONE: it is admitted only when nothing else is in
+      flight, and p1 requests run one at a time. A contention retry exists to
+      re-run with the entire KV pool; concurrent p1s would just re-exhaust it
+      (the server's pool-exhaustion 500 kills every in-flight request, so all
+      victims escalate to p1 together).
+    - While any p1 is active OR waiting, no other priority may start - without
+      the waiting clause a steady request stream would keep the pool occupied
+      and starve the retry forever.
     - Otherwise requests dispatch by priority (lower number first), FIFO
       within the same level.
 """
@@ -90,14 +97,19 @@ class RequestScheduler:
         self._lock = threading.Lock()
         self._active = 0
         self._active_p1 = 0
+        self._waiting_p1 = 0
         self._seq = 0
         self._sync_waiters: list[_Waiter] = []
         self._async_waiters: list[_AsyncWaiter] = []
 
     def _can_dispatch(self, priority: int) -> bool:
+        if priority == Priority.CONTENTION_RETRY:
+            # Solo execution: the retry exists to run with the entire KV pool,
+            # and that also serializes p1s (an active p1 keeps _active > 0).
+            return self._active == 0
         if self._active >= self._max_concurrent:
             return False
-        if self._active_p1 > 0 and priority != Priority.CONTENTION_RETRY:
+        if self._active_p1 > 0 or self._waiting_p1 > 0:
             return False
         return True
 
@@ -124,6 +136,8 @@ class RequestScheduler:
             else:
                 heapq.heappop(self._async_waiters)
 
+            if candidate.priority == Priority.CONTENTION_RETRY:
+                self._waiting_p1 -= 1
             self._admit(candidate.priority)
 
             if isinstance(candidate, _AsyncWaiter):
@@ -140,6 +154,8 @@ class RequestScheduler:
                 return
             self._seq += 1
             waiter = _Waiter(priority, self._seq)
+            if priority == Priority.CONTENTION_RETRY:
+                self._waiting_p1 += 1
             heapq.heappush(self._sync_waiters, waiter)
 
         waiter.event.wait()
@@ -161,6 +177,8 @@ class RequestScheduler:
                 return
             self._seq += 1
             waiter = _AsyncWaiter(priority, self._seq, loop)
+            if priority == Priority.CONTENTION_RETRY:
+                self._waiting_p1 += 1
             heapq.heappush(self._async_waiters, waiter)
 
         await waiter.event.wait()

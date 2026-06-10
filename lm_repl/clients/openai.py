@@ -22,23 +22,41 @@ DEFAULT_PRIME_API_KEY = os.getenv("PRIME_API_KEY")
 DEFAULT_PRIME_INTELLECT_BASE_URL = "https://api.pinference.ai/api/v1/"
 
 
-def _is_context_contention(e: openai.BadRequestError) -> bool:
-    """True when llama-server rejected the request for context size.
+def _is_context_contention(e: openai.APIStatusError) -> bool:
+    """True when llama-server failed the request over KV/context pressure.
 
-    With ``--kv-unified`` the available context is a shared pool, so this 400 usually means
-    another slot is occupying the pool right now - not that the request can never fit. The
-    caller retries once at p1 (exclusive access); if that retry also fails, the request is
-    genuinely too large and the error propagates. Example body:
-    ``{"error":{"code":400,"message":"request (40069 tokens) exceeds the available context
-    size (22016 tokens), try increasing it","type":"exceed_context_size_error"}}``
+    Two distinct shapes, verified against llama-server source and live behavior:
+
+    400 ``exceed_context_size_error`` - the prompt fails the server's STATIC per-slot
+    check (``n_tokens >= slot.n_ctx``, server-context.cpp). Under ``--kv-unified``
+    slot.n_ctx is the full pool, so this means the request can never fit; the p1 retry
+    fails too and the error propagates after one attempt. Kept for the non-unified
+    config and other OpenAI-compatible backends. Example body:
+    ``{"error":{"code":400,"message":"request (40069 tokens) exceeds the available
+    context size (22016 tokens), try increasing it","type":"exceed_context_size_error"}}``
+
+    500 ``Context size has been exceeded.`` - the REAL unified-KV contention failure:
+    when ``llama_decode`` cannot find KV space at n_batch=1, the server fails EVERY
+    processing slot with this 500 and clears the whole context (server-context.cpp,
+    "Context size has been exceeded"). These requests would fit with the pool to
+    themselves, so the p1 retry (drain, then run solo) is exactly the right recovery.
+    Example body:
+    ``{"error":{"code":500,"message":"Context size has been exceeded.","type":"server_error"}}``
     """
     body = getattr(e, "body", None)
     if isinstance(body, dict):
         err = body.get("error", body)
-        if isinstance(err, dict) and err.get("type") == "exceed_context_size_error":
-            return True
+        if isinstance(err, dict):
+            if err.get("type") == "exceed_context_size_error":
+                return True
+            if "context size has been exceeded" in str(err.get("message", "")).lower():
+                return True
     text = str(e)
-    return "exceed_context_size_error" in text or "exceeds the available context size" in text
+    return (
+        "exceed_context_size_error" in text
+        or "exceeds the available context size" in text
+        or "context size has been exceeded" in text.lower()
+    )
 
 
 def _merge_consecutive_roles(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -172,7 +190,7 @@ class OpenAIClient(BaseLM):
                 )
                 self._track_cost(response, model)
                 return response.choices[0].message.content
-            except openai.BadRequestError as e:
+            except (openai.BadRequestError, openai.InternalServerError) as e:
                 if (
                     self.scheduler
                     and priority != Priority.CONTENTION_RETRY
@@ -227,7 +245,7 @@ class OpenAIClient(BaseLM):
                 )
                 self._track_cost(response, model)
                 return response.choices[0].message.content
-            except openai.BadRequestError as e:
+            except (openai.BadRequestError, openai.InternalServerError) as e:
                 if (
                     self.scheduler
                     and priority != Priority.CONTENTION_RETRY

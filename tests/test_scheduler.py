@@ -89,13 +89,103 @@ def test_p1_exclusivity_blocks_other_priorities():
     # Capacity is available (1 of 4 used) but p1 is active, so NORMAL must wait.
     assert not normal_admitted.is_set()
 
-    # Another p1 may still start while a p1 is active.
-    s.acquire(Priority.CONTENTION_RETRY)
-    assert s.active == 2
-    s.release(Priority.CONTENTION_RETRY)
-
     s.release(Priority.CONTENTION_RETRY)
     assert normal_admitted.wait(2)
+    s.release(Priority.NORMAL)
+    assert s.active == 0
+
+
+def test_p1_waits_for_active_requests_to_drain():
+    """A contention retry needs the FULL pool, so p1 must not start while any
+    other request is in flight - blocking only NEW admissions is not enough."""
+    s = RequestScheduler(max_concurrent=4)
+    s.acquire(Priority.NORMAL)
+
+    p1_admitted = threading.Event()
+
+    def p1():
+        s.acquire(Priority.CONTENTION_RETRY)
+        p1_admitted.set()
+
+    t = threading.Thread(target=p1, daemon=True)
+    t.start()
+    assert wait_until(lambda: s.waiting == 1)
+    # Capacity is available (1 of 4 used) but a NORMAL is active: p1 must wait
+    # for it to drain so the retry runs with the whole KV pool.
+    assert not p1_admitted.is_set()
+
+    s.release(Priority.NORMAL)
+    assert p1_admitted.wait(2)
+    assert s.active == 1
+    s.release(Priority.CONTENTION_RETRY)
+    assert s.active == 0
+
+
+def test_p1_requests_serialize():
+    """Concurrent p1 retries would re-exhaust the pool together (the unified-KV
+    mass-kill fails ALL in-flight requests, which all escalate to p1), so p1
+    requests must run one at a time."""
+    s = RequestScheduler(max_concurrent=4)
+    s.acquire(Priority.CONTENTION_RETRY)
+
+    second_admitted = threading.Event()
+
+    def second_p1():
+        s.acquire(Priority.CONTENTION_RETRY)
+        second_admitted.set()
+
+    t = threading.Thread(target=second_p1, daemon=True)
+    t.start()
+    assert wait_until(lambda: s.waiting == 1)
+    assert not second_admitted.is_set()
+
+    s.release(Priority.CONTENTION_RETRY)
+    assert second_admitted.wait(2)
+    assert s.active == 1
+    s.release(Priority.CONTENTION_RETRY)
+    assert s.active == 0
+
+
+def test_waiting_p1_blocks_new_lower_priority_admissions():
+    """While a p1 waits for the pool to drain, new lower-priority arrivals must
+    queue behind it - otherwise a steady request stream starves the retry
+    forever (active never reaches 0)."""
+    s = RequestScheduler(max_concurrent=4)
+    s.acquire(Priority.NORMAL)
+
+    order = []
+    p1_admitted = threading.Event()
+    late_admitted = threading.Event()
+
+    def p1():
+        s.acquire(Priority.CONTENTION_RETRY)
+        order.append("p1")
+        p1_admitted.set()
+
+    t1 = threading.Thread(target=p1, daemon=True)
+    t1.start()
+    assert wait_until(lambda: s.waiting == 1)
+
+    def late_normal():
+        s.acquire(Priority.NORMAL)
+        order.append("late-normal")
+        late_admitted.set()
+
+    t2 = threading.Thread(target=late_normal, daemon=True)
+    t2.start()
+    assert wait_until(lambda: s.waiting == 2)
+    # Capacity exists (1 of 4) and no p1 is ACTIVE yet, but one is WAITING:
+    # the late NORMAL must not barge past it.
+    assert not late_admitted.is_set()
+    assert not p1_admitted.is_set()
+
+    s.release(Priority.NORMAL)
+    assert p1_admitted.wait(2)
+    assert not late_admitted.is_set()  # p1 runs solo
+
+    s.release(Priority.CONTENTION_RETRY)
+    assert late_admitted.wait(2)
+    assert order == ["p1", "late-normal"]
     s.release(Priority.NORMAL)
     assert s.active == 0
 
@@ -262,9 +352,43 @@ def _other_400_error() -> openai_sdk.BadRequestError:
     return openai_sdk.BadRequestError("invalid request", response=response, body=body)
 
 
+def _pool_exhaustion_error() -> openai_sdk.InternalServerError:
+    """The unified-KV contention failure observed live (llama-server
+    server-context.cpp): when llama_decode can't find KV space at n_batch=1,
+    the server 500s EVERY processing slot with this body and clears the
+    entire context."""
+    request = httpx.Request("POST", "http://localhost:8080/v1/chat/completions")
+    response = httpx.Response(500, request=request)
+    body = {
+        "error": {
+            "code": 500,
+            "message": "Context size has been exceeded.",
+            "type": "server_error",
+        }
+    }
+    return openai_sdk.InternalServerError(
+        body["error"]["message"], response=response, body=body
+    )
+
+
+def _unrelated_500_error() -> openai_sdk.InternalServerError:
+    request = httpx.Request("POST", "http://localhost:8080/v1/chat/completions")
+    response = httpx.Response(500, request=request)
+    body = {"error": {"code": 500, "message": "Compute error.", "type": "server_error"}}
+    return openai_sdk.InternalServerError("Compute error.", response=response, body=body)
+
+
 def test_is_context_contention():
     assert _is_context_contention(_contention_error())
     assert not _is_context_contention(_other_400_error())
+
+
+def test_is_context_contention_matches_pool_exhaustion_500():
+    assert _is_context_contention(_pool_exhaustion_error())
+
+
+def test_is_context_contention_rejects_unrelated_500():
+    assert not _is_context_contention(_unrelated_500_error())
 
 
 # =============================================================================
@@ -321,6 +445,96 @@ def test_completion_contention_retry_fails_propagates():
     assert client.client.chat.completions.create.call_count == 2
     assert scheduler.active == 0
     assert scheduler._active_p1 == 0
+
+
+def test_completion_pool_exhaustion_500_retries_at_p1():
+    scheduler = RequestScheduler(max_concurrent=2)
+    client = _make_client(scheduler)
+    client.client.chat.completions.create = MagicMock(
+        side_effect=[_pool_exhaustion_error(), _ok_response()]
+    )
+
+    with patch.object(scheduler, "acquire", wraps=scheduler.acquire) as acquire_spy:
+        result = client.completion("hello")
+
+    assert result == "ok"
+    assert client.client.chat.completions.create.call_count == 2
+    priorities = [call.args[0] for call in acquire_spy.call_args_list]
+    assert priorities == [Priority.NORMAL, Priority.CONTENTION_RETRY]
+    assert scheduler.active == 0
+    assert scheduler._active_p1 == 0
+    assert scheduler.waiting == 0
+
+
+def test_completion_pool_exhaustion_500_retry_fails_propagates():
+    scheduler = RequestScheduler(max_concurrent=2)
+    client = _make_client(scheduler)
+    client.client.chat.completions.create = MagicMock(
+        side_effect=[_pool_exhaustion_error(), _pool_exhaustion_error()]
+    )
+
+    with pytest.raises(openai_sdk.InternalServerError):
+        client.completion("hello")
+
+    assert client.client.chat.completions.create.call_count == 2
+    assert scheduler.active == 0
+    assert scheduler._active_p1 == 0
+
+
+def test_completion_unrelated_500_no_retry():
+    scheduler = RequestScheduler(max_concurrent=2)
+    client = _make_client(scheduler)
+    client.client.chat.completions.create = MagicMock(side_effect=_unrelated_500_error())
+
+    with pytest.raises(openai_sdk.InternalServerError):
+        client.completion("hello")
+
+    assert client.client.chat.completions.create.call_count == 1
+    assert scheduler.active == 0
+
+
+def test_completion_pool_exhaustion_500_without_scheduler_no_retry():
+    client = _make_client(scheduler=None)
+    client.client.chat.completions.create = MagicMock(side_effect=_pool_exhaustion_error())
+
+    with pytest.raises(openai_sdk.InternalServerError):
+        client.completion("hello")
+
+    assert client.client.chat.completions.create.call_count == 1
+
+
+def test_acompletion_pool_exhaustion_500_retries_at_p1():
+    async def main():
+        scheduler = RequestScheduler(max_concurrent=2)
+        client = _make_client(scheduler)
+
+        calls = []
+
+        async def fake_create(**kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise _pool_exhaustion_error()
+            return _ok_response()
+
+        client.async_client.chat.completions.create = fake_create
+
+        acquired = []
+        real_aacquire = scheduler.aacquire
+
+        async def spy_aacquire(priority):
+            acquired.append(priority)
+            await real_aacquire(priority)
+
+        scheduler.aacquire = spy_aacquire
+
+        result = await client.acompletion("hello")
+        assert result == "ok"
+        assert len(calls) == 2
+        assert acquired == [Priority.NORMAL, Priority.CONTENTION_RETRY]
+        assert scheduler.active == 0
+        assert scheduler._active_p1 == 0
+
+    asyncio.run(main())
 
 
 def test_completion_non_contention_400_no_retry():
