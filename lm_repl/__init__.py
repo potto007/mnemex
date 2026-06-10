@@ -1,4 +1,5 @@
 from lm_repl.core.rlm import RLM
+from lm_repl.core.srlm import SRLM
 from lm_repl.utils.exceptions import (
     BudgetExceededError,
     CancellationError,
@@ -9,6 +10,7 @@ from lm_repl.utils.exceptions import (
 
 __all__ = [
     "RLM",
+    "SRLM",
     "BudgetExceededError",
     "TimeoutExceededError",
     "TokenLimitExceededError",
