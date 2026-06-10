@@ -60,7 +60,13 @@ All `RLM` constructor arguments pass through unchanged, including `child_system_
 
 ## Install
 
-Requires **Python 3.11+**. This fork is not on PyPI (`pip install rlms` installs upstream); install editable from a checkout:
+Requires **Python 3.11+**. Note that `pip install rlms` installs the upstream package, not this fork.
+
+```bash
+pip install lm-repl
+```
+
+For development, install editable from a checkout:
 
 ```bash
 uv pip install -e /path/to/lm-repl --no-deps

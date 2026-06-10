@@ -3,6 +3,9 @@ name = "lm-repl"
 authors = [
     {name = "Alex Zhang", email = "altzhang@mit.edu"},
 ]
+maintainers = [
+    {name = "Paul Otto", email = "potto007@gmail.com"},
+]
 version = "0.2.0"
 description = "LM-REPL: Recursive Language Models with Self-Reflective Program Search."
 readme = "README.md"
@@ -23,16 +26,16 @@ dependencies = [
     "google-genai>=1.56.0",
     "openai>=2.14.0",
     "portkey-ai>=2.1.0",
-    "pytest>=9.0.2",
     "python-dotenv>=1.2.1",
     "requests>=2.32.5",
     "rich>=13.0.0",
 ]
 
 [project.urls]
-Homepage = "https://github.com/alexzhang13/rlm"
-Repository = "https://github.com/alexzhang13/rlm"
-Issues = "https://github.com/alexzhang13/rlm/issues"
+Homepage = "https://github.com/potto007/lm-repl"
+Repository = "https://github.com/potto007/lm-repl"
+Issues = "https://github.com/potto007/lm-repl/issues"
+Upstream = "https://github.com/alexzhang13/rlm"
 
 [project.optional-dependencies]
 modal = ["modal>=0.73.0", "dill>=0.3.7"]
