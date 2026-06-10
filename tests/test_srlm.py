@@ -172,3 +172,98 @@ class TestCandidateTemperature:
             srlm.completion("test prompt")
 
         assert all(t is None for t in captured_temps)
+
+
+# --- Verbalized confidence & joint scoring tests ---
+
+import math
+from lm_repl.core.srlm import _parse_confidence_scores, _compute_vc_score
+
+
+class TestParseConfidenceScores:
+    def test_single_score(self):
+        text = 'I found the answer. {"confidence": 85}'
+        assert _parse_confidence_scores(text) == [85.0]
+
+    def test_multiple_scores(self):
+        text = '{"confidence": 90}\nsome code\n{"confidence": 70}'
+        assert _parse_confidence_scores(text) == [90.0, 70.0]
+
+    def test_no_scores(self):
+        assert _parse_confidence_scores("just regular text") == []
+
+    def test_handles_whitespace_variants(self):
+        text = '{"confidence" : 75}'
+        assert _parse_confidence_scores(text) == [75.0]
+
+    def test_handles_integer_and_float(self):
+        text = '{"confidence": 80}\n{"confidence": 92.5}'
+        scores = _parse_confidence_scores(text)
+        assert scores == [80.0, 92.5]
+
+    def test_clamps_to_range(self):
+        text = '{"confidence": 0}\n{"confidence": 100}\n{"confidence": 150}'
+        scores = _parse_confidence_scores(text)
+        assert scores[0] == 0.0
+        assert scores[1] == 100.0
+        assert scores[2] == 100.0  # clamped
+
+
+class TestComputeVCScore:
+    def test_perfect_confidence(self):
+        text = '{"confidence": 100}\n{"confidence": 100}'
+        assert _compute_vc_score(text) == 0.0  # log(1) + log(1) = 0
+
+    def test_partial_confidence(self):
+        text = '{"confidence": 50}'
+        score = _compute_vc_score(text)
+        assert score < 0  # log(0.5) is negative
+        assert abs(score - math.log(0.5)) < 1e-6
+
+    def test_no_scores_returns_neg_inf(self):
+        assert _compute_vc_score("no confidence here") == float('-inf')
+
+    def test_zero_confidence_clamps(self):
+        text = '{"confidence": 0}'
+        score = _compute_vc_score(text)
+        assert score == float('-inf')  # log(0) is -inf, use floor
+
+
+class TestSelectBestWithConfidence:
+    def test_confidence_mode_prefers_high_vc(self):
+        """High VC score (closer to 0) wins over low VC score."""
+        c1 = _make_completion("42", 2.0)
+        c1.metadata = {"trajectory_text": '{"confidence": 95}\n{"confidence": 90}'}
+        c2 = _make_completion("42", 2.0)
+        c2.metadata = {"trajectory_text": '{"confidence": 40}\n{"confidence": 30}'}
+
+        result = _select_best([c1, c2], use_confidence=True)
+        assert result is c1
+
+    def test_confidence_mode_joint_score(self):
+        """Joint score VC*Len: high confidence + short trace beats low confidence + short trace."""
+        c1 = _make_completion("42", 1.0)
+        c1.metadata = {"trajectory_text": '{"confidence": 95}'}
+        c2 = _make_completion("42", 1.0)
+        c2.metadata = {"trajectory_text": '{"confidence": 50}'}
+
+        result = _select_best([c1, c2], use_confidence=True)
+        assert result is c1
+
+    def test_confidence_off_ignores_metadata(self):
+        """Without confidence mode, selection uses execution_time only."""
+        c1 = _make_completion("42", 2.0)
+        c1.metadata = {"trajectory_text": '{"confidence": 95}'}
+        c2 = _make_completion("42", 1.0)
+        c2.metadata = {"trajectory_text": '{"confidence": 30}'}
+
+        result = _select_best([c1, c2], use_confidence=False)
+        assert result is c2  # shorter time wins
+
+    def test_falls_back_to_time_when_no_confidence_data(self):
+        """If metadata has no trajectory_text, fall back to time-based selection."""
+        c1 = _make_completion("42", 2.0)
+        c2 = _make_completion("42", 1.0)
+
+        result = _select_best([c1, c2], use_confidence=True)
+        assert result is c2

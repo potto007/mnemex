@@ -6,6 +6,8 @@ and uncertainty-guided selection per the Apple SRLM paper
 """
 from __future__ import annotations
 
+import math
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -54,12 +56,14 @@ class SRLM(RLM):
         direct_threshold: int = 0,
         n_candidates: int = 1,
         candidate_temperature: float | None = None,
+        confidence_elicitation: bool = False,
         **kwargs: Any,
     ):
         super().__init__(**kwargs)
         self.direct_threshold = direct_threshold
         self.n_candidates = n_candidates
         self.candidate_temperature = candidate_temperature
+        self.confidence_elicitation = confidence_elicitation
 
     def _direct_completion(self, prompt: str | dict[str, Any]) -> RLMChatCompletion:
         """Bypass REPL - direct LLM chat completion for short contexts."""
@@ -134,7 +138,7 @@ class SRLM(RLM):
             elif self.candidate_temperature is not None and self.backend_kwargs and "default_extra_body" in self.backend_kwargs:
                 self.backend_kwargs["default_extra_body"].pop("temperature", None)
 
-        best = _select_best(candidates)
+        best = _select_best(candidates, use_confidence=self.confidence_elicitation)
         if best.metadata is None:
             best.metadata = {}
         if isinstance(best.metadata, dict):
@@ -143,11 +147,39 @@ class SRLM(RLM):
         return best
 
 
-def _select_best(candidates: list[RLMChatCompletion]) -> RLMChatCompletion:
-    """Select the best candidate using self-consistency + trace length.
+def _parse_confidence_scores(text: str) -> list[float]:
+    """Extract {"confidence": N} values from model response text."""
+    pattern = r'\{\s*"confidence"\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*\}'
+    matches = re.findall(pattern, text)
+    return [min(float(m), 100.0) for m in matches]
+
+
+def _compute_vc_score(text: str) -> float:
+    """Compute verbalized confidence score (sum of log-probabilities).
+
+    Returns a value <= 0. Closer to 0 = higher confidence.
+    Returns -inf when no confidence scores are found or any score is 0.
+    """
+    scores = _parse_confidence_scores(text)
+    if not scores:
+        return float('-inf')
+    total = 0.0
+    for v in scores:
+        if v <= 0:
+            return float('-inf')
+        total += math.log(v / 100.0)
+    return total
+
+
+def _select_best(
+    candidates: list[RLMChatCompletion], use_confidence: bool = False
+) -> RLMChatCompletion:
+    """Select the best candidate using self-consistency + uncertainty signals.
 
     1. Majority vote on final answer (self-consistency).
-    2. Among the consistent set, pick the shortest trace (fewest tokens).
+    2. Among the consistent set:
+       - If use_confidence: joint score VC(p) * Len(p), pick argmax (closest to 0)
+       - Otherwise: pick shortest execution_time
     """
     if len(candidates) == 1:
         return candidates[0]
@@ -160,4 +192,22 @@ def _select_best(candidates: list[RLMChatCompletion]) -> RLMChatCompletion:
     majority = max(counts, key=counts.get)
     consistent = [c for c, a in zip(candidates, answers) if a == majority]
 
-    return min(consistent, key=lambda c: c.execution_time)
+    if not use_confidence:
+        return min(consistent, key=lambda c: c.execution_time)
+
+    def _joint_score(c: RLMChatCompletion) -> float:
+        text = ""
+        if isinstance(c.metadata, dict):
+            text = c.metadata.get("trajectory_text", "")
+        vc = _compute_vc_score(text)
+        if vc == float('-inf'):
+            return float('-inf')
+        return vc * c.execution_time
+
+    scored = [(c, _joint_score(c)) for c in consistent]
+    has_scores = any(s != float('-inf') for _, s in scored)
+
+    if not has_scores:
+        return min(consistent, key=lambda c: c.execution_time)
+
+    return max(scored, key=lambda x: x[1])[0]
