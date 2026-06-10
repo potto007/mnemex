@@ -902,3 +902,111 @@ def test_lm_handler_no_scheduler_by_default():
     handler = LMHandler(client)
     assert handler.scheduler is None
     assert client.scheduler is None
+
+
+# =============================================================================
+# Cross-process gate integration (stub gate; real flock tested in
+# tests/test_coordination.py)
+# =============================================================================
+
+
+class _StubGate:
+    """Duck-typed CrossProcessGate: records calls, optionally fails enter."""
+
+    def __init__(self, fail_enter=False):
+        self.calls = []
+        self.fail_enter = fail_enter
+        self.aenter_started = threading.Event()
+        self.block_aenter = False
+
+    def enter(self, priority):
+        self.calls.append(("enter", priority))
+        if self.fail_enter:
+            raise RuntimeError("gate boom")
+
+    async def aenter(self, priority):
+        self.calls.append(("aenter", priority))
+        self.aenter_started.set()
+        if self.block_aenter:
+            await asyncio.Event().wait()  # parks forever until cancelled
+        if self.fail_enter:
+            raise RuntimeError("gate boom")
+
+    def exit(self, priority):
+        self.calls.append(("exit", priority))
+
+
+def test_gate_enter_after_admission_exit_before_release():
+    g = _StubGate()
+    s = RequestScheduler(max_concurrent=2, gate=g)
+    s.acquire(Priority.NORMAL)
+    assert s.active == 1
+    s.release(Priority.NORMAL)
+    assert s.active == 0
+    assert g.calls == [("enter", Priority.NORMAL), ("exit", Priority.NORMAL)]
+
+
+def test_gate_failure_rolls_back_local_slot():
+    g = _StubGate(fail_enter=True)
+    s = RequestScheduler(max_concurrent=2, gate=g)
+    with pytest.raises(RuntimeError, match="gate boom"):
+        s.acquire(Priority.NORMAL)
+    assert s.active == 0
+    # Scheduler stays usable once the gate recovers
+    g.fail_enter = False
+    s.acquire(Priority.NORMAL)
+    s.release(Priority.NORMAL)
+    assert s.active == 0
+
+
+def test_gate_failure_rollback_unblocks_waiters():
+    g = _StubGate(fail_enter=True)
+    s = RequestScheduler(max_concurrent=1, gate=g)
+    with pytest.raises(RuntimeError):
+        s.acquire(Priority.NORMAL)
+    # The failed acquire must not leave a phantom active slot
+    g.fail_enter = False
+    admitted = threading.Event()
+
+    def second():
+        s.acquire(Priority.NORMAL)
+        admitted.set()
+
+    threading.Thread(target=second, daemon=True).start()
+    assert admitted.wait(2)
+    s.release(Priority.NORMAL)
+    assert s.active == 0
+
+
+def test_async_gate_failure_rolls_back_local_slot():
+    async def main():
+        g = _StubGate(fail_enter=True)
+        s = RequestScheduler(max_concurrent=2, gate=g)
+        with pytest.raises(RuntimeError, match="gate boom"):
+            await s.aacquire(Priority.NORMAL)
+        assert s.active == 0
+
+    asyncio.run(main())
+
+
+def test_cancel_during_gate_wait_rolls_back_local_slot():
+    async def main():
+        g = _StubGate()
+        g.block_aenter = True
+        s = RequestScheduler(max_concurrent=2, gate=g)
+        task = asyncio.create_task(s.aacquire(Priority.NORMAL))
+        await asyncio.sleep(0.05)
+        assert g.aenter_started.is_set()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert s.active == 0
+
+    asyncio.run(main())
+
+
+def test_no_gate_means_no_gate_calls():
+    s = RequestScheduler(max_concurrent=2)
+    s.acquire(Priority.NORMAL)
+    s.release(Priority.NORMAL)
+    assert s.active == 0

@@ -38,6 +38,10 @@ import heapq
 import threading
 import time
 from enum import IntEnum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from lm_repl.clients.coordination import CrossProcessGate
 
 
 class Priority(IntEnum):
@@ -115,7 +119,12 @@ class _AsyncWaiter:
 class RequestScheduler:
     """Thread-safe priority scheduler with both sync and async acquire/release."""
 
-    def __init__(self, max_concurrent: int = 8, aging_interval: float | None = 30.0):
+    def __init__(
+        self,
+        max_concurrent: int = 8,
+        aging_interval: float | None = 30.0,
+        gate: "CrossProcessGate | None" = None,
+    ):
         """
         Args:
             max_concurrent: Most requests allowed in flight at once. Match the
@@ -123,9 +132,14 @@ class RequestScheduler:
             aging_interval: Seconds of queue wait worth one priority level for
                 p2-p5 waiters (an old LOW eventually outranks a fresh HIGH).
                 None disables aging (strict priority, FIFO within a level).
+            gate: Optional CrossProcessGate extending p1 exclusivity across OS
+                processes that share one server. Entered after local
+                admission, exited before local release. None keeps behavior
+                purely in-process.
         """
         self._max_concurrent = max_concurrent
         self._aging_interval = aging_interval
+        self._gate = gate
         self._lock = threading.Lock()
         self._active = 0
         self._active_p1 = 0
@@ -212,22 +226,39 @@ class RequestScheduler:
         with self._lock:
             if self._can_dispatch(priority):
                 self._admit(priority)
-                return
-            self._seq += 1
-            band, vkey = self._sort_fields(priority)
-            waiter = _Waiter(priority, band, vkey, self._seq)
-            if priority == Priority.CONTENTION_RETRY:
-                self._waiting_p1 += 1
-            heapq.heappush(self._sync_waiters, waiter)
+                waiter = None
+            else:
+                self._seq += 1
+                band, vkey = self._sort_fields(priority)
+                waiter = _Waiter(priority, band, vkey, self._seq)
+                if priority == Priority.CONTENTION_RETRY:
+                    self._waiting_p1 += 1
+                heapq.heappush(self._sync_waiters, waiter)
 
-        waiter.event.wait()
+        if waiter is not None:
+            waiter.event.wait()
 
-    def release(self, priority: int = Priority.NORMAL) -> None:
+        if self._gate is not None:
+            try:
+                self._gate.enter(priority)
+            except BaseException:
+                # Cross-process acquisition failed after local admission: give
+                # the local slot back so counters never skew. Local-only
+                # release: we never entered the gate.
+                self._release_local(priority)
+                raise
+
+    def _release_local(self, priority: int) -> None:
         with self._lock:
             self._active -= 1
             if priority == Priority.CONTENTION_RETRY:
                 self._active_p1 -= 1
             self._dispatch_next()
+
+    def release(self, priority: int = Priority.NORMAL) -> None:
+        if self._gate is not None:
+            self._gate.exit(priority)
+        self._release_local(priority)
 
     # -- async interface --
 
@@ -236,40 +267,50 @@ class RequestScheduler:
         with self._lock:
             if self._can_dispatch(priority):
                 self._admit(priority)
-                return
-            self._seq += 1
-            band, vkey = self._sort_fields(priority)
-            waiter = _AsyncWaiter(priority, band, vkey, self._seq, loop)
-            if priority == Priority.CONTENTION_RETRY:
-                self._waiting_p1 += 1
-            heapq.heappush(self._async_waiters, waiter)
+                waiter = None
+            else:
+                self._seq += 1
+                band, vkey = self._sort_fields(priority)
+                waiter = _AsyncWaiter(priority, band, vkey, self._seq, loop)
+                if priority == Priority.CONTENTION_RETRY:
+                    self._waiting_p1 += 1
+                heapq.heappush(self._async_waiters, waiter)
 
-        try:
-            await waiter.event.wait()
-        except asyncio.CancelledError:
-            with self._lock:
-                if waiter.dispatched:
-                    # Dispatch already admitted us; give the slot back since
-                    # this task will never run a request or release.
-                    self._active -= 1
-                    if priority == Priority.CONTENTION_RETRY:
-                        self._active_p1 -= 1
-                else:
-                    # Still queued: mark for lazy removal by _dispatch_next.
-                    waiter.cancelled = True
-                    if priority == Priority.CONTENTION_RETRY:
-                        self._waiting_p1 -= 1
-                # Either branch can unblock other waiters (a freed slot, or a
-                # vanished waiting-p1 that was gating admissions).
-                self._dispatch_next()
-            raise
+        if waiter is not None:
+            try:
+                await waiter.event.wait()
+            except asyncio.CancelledError:
+                with self._lock:
+                    if waiter.dispatched:
+                        # Dispatch already admitted us; give the slot back since
+                        # this task will never run a request or release.
+                        self._active -= 1
+                        if priority == Priority.CONTENTION_RETRY:
+                            self._active_p1 -= 1
+                    else:
+                        # Still queued: mark for lazy removal by _dispatch_next.
+                        waiter.cancelled = True
+                        if priority == Priority.CONTENTION_RETRY:
+                            self._waiting_p1 -= 1
+                    # Either branch can unblock other waiters (a freed slot, or a
+                    # vanished waiting-p1 that was gating admissions).
+                    self._dispatch_next()
+                raise
+
+        if self._gate is not None:
+            try:
+                await self._gate.aenter(priority)
+            except BaseException:
+                # Includes CancelledError while polling the gate: aenter has
+                # already closed its partial fds; give the local slot back.
+                self._release_local(priority)
+                raise
 
     async def arelease(self, priority: int = Priority.NORMAL) -> None:
-        with self._lock:
-            self._active -= 1
-            if priority == Priority.CONTENTION_RETRY:
-                self._active_p1 -= 1
-            self._dispatch_next()
+        if self._gate is not None:
+            # exit() only closes fds; it never blocks, so no executor needed.
+            self._gate.exit(priority)
+        self._release_local(priority)
 
     @property
     def active(self) -> int:
