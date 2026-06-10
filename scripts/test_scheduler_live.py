@@ -16,7 +16,10 @@ Tests:
 """
 
 import asyncio
+import hashlib
 import logging
+import multiprocessing
+import os
 import sys
 import time
 
@@ -220,6 +223,64 @@ async def toolarge_test():
     print("PASSED\n")
 
 
+def _multiproc_worker(idx, n_per_proc, toks, mc, coord_dir):
+    """One OS process: own gate-equipped scheduler, unique prompts."""
+    from lm_repl.clients.coordination import CrossProcessGate
+
+    key = hashlib.sha256(BASE_URL.encode()).hexdigest()[:16]
+    gate = CrossProcessGate(coord_dir, key)
+    scheduler = RequestScheduler(max_concurrent=mc, gate=gate)
+    client = make_client(scheduler)
+
+    async def run():
+        async def do_one(i):
+            # Per-process uniq offset: prompts must be unique across ALL
+            # processes or prefix-cache reuse masks KV pressure.
+            uniq = idx * 10000 + i
+            prompt = make_prompt(toks, uniq=uniq)
+            t0 = time.time()
+            try:
+                result = await client.acompletion(prompt)
+                print(f"  [p{idx}:{i}] OK ({time.time() - t0:.1f}s): {(result or '')[:40]!r}")
+                return "ok"
+            except Exception as e:
+                print(f"  [p{idx}:{i}] FAIL ({time.time() - t0:.1f}s): {type(e).__name__}: {str(e)[:100]}")
+                return "fail"
+
+        results = await asyncio.gather(*[do_one(i) for i in range(n_per_proc)])
+        assert scheduler.active == 0, "Slot leak!"
+        return results.count("fail")
+
+    sys.exit(min(asyncio.run(run()), 250))
+
+
+def multiproc_test(n_procs=4, n_per_proc=4, toks=12000, mc=2,
+                   coord_dir="/tmp/lm-repl-coord-live"):
+    """N OS processes share one llama-server through the cross-process gate.
+
+    Collectively oversubscribes the unified KV pool so the server mass-kills
+    in-flight requests; every process's p1 retries must drain GLOBALLY (the
+    other processes' traffic included) and succeed. Success: zero failures.
+    """
+    print(f"\n=== MULTIPROC TEST: {n_procs} procs x {n_per_proc} reqs, "
+          f"~{toks} tok, mc={mc}/proc, dir={coord_dir} ===")
+    os.makedirs(coord_dir, exist_ok=True)
+    ctx = multiprocessing.get_context("spawn")
+    procs = [
+        ctx.Process(target=_multiproc_worker, args=(i, n_per_proc, toks, mc, coord_dir))
+        for i in range(n_procs)
+    ]
+    t0 = time.time()
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join()
+    total_fails = sum(p.exitcode or 0 for p in procs)
+    print(f"\nTotal wall time: {time.time() - t0:.1f}s")
+    print(f"Total failures across processes: {total_fails}")
+    print("PASSED" if total_fails == 0 else "FAILED")
+
+
 if __name__ == "__main__":
     mode = sys.argv[1] if len(sys.argv) > 1 else "smoke"
 
@@ -232,9 +293,15 @@ if __name__ == "__main__":
         asyncio.run(contention_test(n, toks, mc))
     elif mode == "toolarge":
         asyncio.run(toolarge_test())
+    elif mode == "multiproc":
+        np_ = int(sys.argv[2]) if len(sys.argv) > 2 else 4
+        npp = int(sys.argv[3]) if len(sys.argv) > 3 else 4
+        toks = int(sys.argv[4]) if len(sys.argv) > 4 else 12000
+        mc = int(sys.argv[5]) if len(sys.argv) > 5 else 2
+        multiproc_test(np_, npp, toks, mc)
     elif mode == "all":
         smoke_test()
         asyncio.run(contention_test())
         asyncio.run(toolarge_test())
     else:
-        print(f"Usage: {sys.argv[0]} [smoke|contention|toolarge|all] [n_concurrent] [tokens_per_prompt]")
+        print(f"Usage: {sys.argv[0]} [smoke|contention|toolarge|multiproc|all] [n_procs|n_concurrent] [n_per_proc] [tokens_per_prompt] [max_concurrent]")
