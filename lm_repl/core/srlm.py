@@ -201,6 +201,53 @@ def _compute_vc_score(step_texts: list[str]) -> float:
     return total
 
 
+_NUMERIC_RE = re.compile(r"-?(?:\d{1,3}(?:,\d{3})+|\d*)\.?\d+")
+
+
+def _normalize_answer(s: str) -> str:
+    """Canonical form of a final answer for self-consistency comparison."""
+    s = re.sub(r"\s+", " ", s.strip().lower())
+    s = s.strip("\"'“”‘’")
+    s = s.rstrip(".!?,;: ").strip()
+    if _NUMERIC_RE.fullmatch(s):
+        try:
+            return f"{float(s.replace(',', '')):g}"
+        except ValueError:
+            pass
+    return s
+
+
+def _answers_equivalent(a: str, b: str) -> bool:
+    """Whether two normalized answers express the same final answer.
+
+    Equal strings, or the shorter answer appearing in the longer one on word
+    boundaries (so "42" matches "the answer is 42" but not "417").
+    """
+    if a == b:
+        return True
+    if not a or not b:
+        return False
+    shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
+    return re.search(rf"(?<!\w){re.escape(shorter)}(?!\w)", longer) is not None
+
+
+def _cluster_answers(answers: list[str]) -> list[list[int]]:
+    """Greedy clustering of normalized answers into equivalence groups.
+
+    Each answer joins the first cluster whose representative (first member)
+    it is equivalent to, else starts a new cluster. Returns index groups.
+    """
+    clusters: list[tuple[str, list[int]]] = []
+    for i, a in enumerate(answers):
+        for rep, members in clusters:
+            if _answers_equivalent(rep, a):
+                members.append(i)
+                break
+        else:
+            clusters.append((a, [i]))
+    return [members for _, members in clusters]
+
+
 def _trace_len(c: RLMChatCompletion) -> float:
     """Len(p): trace length in output tokens, per the paper.
 
@@ -217,7 +264,11 @@ def _select_best(
 ) -> RLMChatCompletion:
     """Select the best candidate using self-consistency + uncertainty signals.
 
-    1. Majority vote on final answer (self-consistency).
+    1. Plurality vote on the final answer (self-consistency), with answers
+       compared semantically (normalization + word-boundary containment)
+       rather than by exact string match. Tied clusters (including the
+       all-unique case) pool their candidates for the scoring stage instead
+       of arbitrarily preferring the first-seen answer.
     2. Among the consistent set:
        - If use_confidence: joint score VC(p) * Len(p), pick argmax (closest to 0)
        - Otherwise: pick shortest trace (output tokens, else execution time)
@@ -225,13 +276,15 @@ def _select_best(
     if len(candidates) == 1:
         return candidates[0]
 
-    answers = [c.response.strip().lower() for c in candidates]
-    counts: dict[str, int] = {}
-    for a in answers:
-        counts[a] = counts.get(a, 0) + 1
-
-    majority = max(counts, key=counts.get)
-    consistent = [c for c, a in zip(candidates, answers) if a == majority]
+    answers = [_normalize_answer(c.response) for c in candidates]
+    clusters = _cluster_answers(answers)
+    max_size = max(len(members) for members in clusters)
+    consistent = [
+        candidates[i]
+        for members in clusters
+        if len(members) == max_size
+        for i in members
+    ]
 
     if not use_confidence:
         return min(consistent, key=_trace_len)

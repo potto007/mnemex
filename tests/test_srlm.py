@@ -143,6 +143,90 @@ class TestSelectBest:
         assert result.execution_time == 1.0
 
 
+class TestNormalizeAnswer:
+    def test_case_and_whitespace(self):
+        from lm_repl.core.srlm import _normalize_answer
+
+        assert _normalize_answer("  The   Answer ") == "the answer"
+
+    def test_strips_surrounding_quotes(self):
+        from lm_repl.core.srlm import _normalize_answer
+
+        assert _normalize_answer('"42"') == "42"
+
+    def test_strips_trailing_punctuation(self):
+        from lm_repl.core.srlm import _normalize_answer
+
+        assert _normalize_answer("It is covered.") == "it is covered"
+
+    def test_numeric_forms_canonicalize(self):
+        from lm_repl.core.srlm import _normalize_answer
+
+        assert _normalize_answer("42.0") == _normalize_answer("42")
+        assert _normalize_answer("0.50") == _normalize_answer(".5")
+
+
+class TestAnswersEquivalent:
+    def test_equal_after_normalization(self):
+        from lm_repl.core.srlm import _answers_equivalent, _normalize_answer
+
+        a = _normalize_answer("YES.")
+        b = _normalize_answer("yes")
+        assert _answers_equivalent(a, b)
+
+    def test_word_boundary_containment(self):
+        from lm_repl.core.srlm import _answers_equivalent
+
+        assert _answers_equivalent("42", "the answer is 42")
+
+    def test_no_partial_number_match(self):
+        from lm_repl.core.srlm import _answers_equivalent
+
+        assert not _answers_equivalent("7", "17")
+
+    def test_distinct_answers_not_equivalent(self):
+        from lm_repl.core.srlm import _answers_equivalent
+
+        assert not _answers_equivalent("paris", "london")
+
+
+class TestSelectBestSemanticConsistency:
+    def test_free_text_variants_form_majority(self):
+        """Phrasing variants of the same answer must cluster - exact string
+        match made every free-text answer unique, degenerating the vote."""
+        c1 = _make_completion_with_tokens("The deductible is $500", 1.0, 300)
+        c2 = _make_completion_with_tokens("the deductible is $500.", 1.0, 400)
+        c3 = _make_completion_with_tokens("$2000", 1.0, 100)
+        result = _select_best([c1, c2, c3])
+        assert result in (c1, c2)
+
+    def test_containment_clusters_short_and_verbose(self):
+        c1 = _make_completion_with_tokens("42", 1.0, 100)
+        c2 = _make_completion_with_tokens("The answer is 42", 1.0, 300)
+        c3 = _make_completion_with_tokens("99", 1.0, 50)
+        result = _select_best([c1, c2, c3])
+        assert result in (c1, c2)
+
+    def test_all_unique_scores_instead_of_first_key(self):
+        """With no plurality, fall through to uncertainty scoring over all
+        candidates - never arbitrarily return the first insertion key."""
+        c1 = _make_completion_with_tokens("alpha", 1.0, 5000)
+        c2 = _make_completion_with_tokens("beta", 1.0, 100)
+        c3 = _make_completion_with_tokens("gamma", 1.0, 3000)
+        result = _select_best([c1, c2, c3])
+        assert result is c2
+
+    def test_tied_clusters_pool_for_scoring(self):
+        """A 2-vs-2 tie scores candidates from both clusters rather than
+        silently preferring whichever answer appeared first."""
+        a1 = _make_completion_with_tokens("alpha", 1.0, 4000)
+        a2 = _make_completion_with_tokens("alpha", 1.0, 3000)
+        b1 = _make_completion_with_tokens("beta", 1.0, 100)
+        b2 = _make_completion_with_tokens("beta", 1.0, 5000)
+        result = _select_best([a1, a2, b1, b2])
+        assert result is b1
+
+
 class TestCandidateTemperature:
     def test_default_is_none(self):
         srlm = SRLM(
