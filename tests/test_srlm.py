@@ -300,6 +300,51 @@ class TestCandidateTemperature:
         assert all(t is None for t in captured_temps)
 
 
+class TestConfidenceElicitationPrompt:
+    def _srlm(self, **extra):
+        return SRLM(
+            backend="openai",
+            backend_kwargs={"model_name": "test", "base_url": "http://localhost:9999/v1"},
+            **extra,
+        )
+
+    def test_suffix_appended_when_enabled(self):
+        srlm = self._srlm(confidence_elicitation=True)
+        assert "CONFIDENCE REPORTING" in srlm.system_prompt
+
+    def test_no_suffix_by_default(self):
+        srlm = self._srlm()
+        assert "CONFIDENCE REPORTING" not in srlm.system_prompt
+
+    def test_suffix_preserved_on_custom_prompt(self):
+        srlm = self._srlm(
+            confidence_elicitation=True,
+            custom_system_prompt="My orchestrator prompt. {custom_tools_section}",
+        )
+        assert srlm.system_prompt.startswith("My orchestrator prompt.")
+        assert "CONFIDENCE REPORTING" in srlm.system_prompt
+
+    def test_prompt_survives_format_and_renders_literal_json(self):
+        """build_rlm_system_prompt .format()s the whole system prompt, so the
+        suffix must brace-escape its JSON example. Unescaped '{\"confidence\"...'
+        raises KeyError before the first iteration ever runs."""
+        from lm_repl.core.types import QueryMetadata
+        from lm_repl.utils.prompts import build_rlm_system_prompt
+
+        srlm = self._srlm(confidence_elicitation=True)
+        messages = build_rlm_system_prompt(
+            system_prompt=srlm.system_prompt,
+            query_metadata=QueryMetadata("some context"),
+        )
+        rendered = messages[0]["content"]
+        assert '{"confidence": N}' in rendered
+
+    def test_candidates_inherit_suffix(self):
+        srlm = self._srlm(confidence_elicitation=True, n_candidates=2)
+        cand = srlm._spawn_candidate_rlm(0)
+        assert "CONFIDENCE REPORTING" in cand.system_prompt
+
+
 class TestCandidateSpawning:
     def _srlm(self, **extra):
         return SRLM(

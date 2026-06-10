@@ -18,6 +18,20 @@ from lm_repl.core.types import RLMChatCompletion
 from lm_repl.logger import RLMLogger
 
 
+# Appended to the orchestrator system prompt when confidence_elicitation is
+# on. Wording matches the rlm-trainer teacher suffix (generate.py) that the
+# student is trained on. The JSON example is brace-escaped because
+# build_rlm_system_prompt .format()s the whole system prompt.
+CONFIDENCE_ELICITATION_SUFFIX = (
+    "\n\nCONFIDENCE REPORTING (required at end of EVERY response):\n"
+    "After your code block, on a NEW line, report your confidence in this "
+    "step's correctness:\n"
+    '{{"confidence": N}}\n'
+    "where N is 0-100. Be precise: 100 = certain, 50 = guessing, "
+    "0 = no idea. This line MUST appear after every response you give."
+)
+
+
 def _choose_mode(context_len: int, direct_threshold: int | None) -> str:
     if not direct_threshold or direct_threshold <= 0:
         return "rlm"
@@ -56,6 +70,8 @@ class SRLM(RLM):
         self.candidate_temperature = candidate_temperature
         self.candidate_parallel = candidate_parallel
         self.confidence_elicitation = confidence_elicitation
+        if confidence_elicitation:
+            self.system_prompt = self.system_prompt + CONFIDENCE_ELICITATION_SUFFIX
 
     def _direct_completion(self, prompt: str | dict[str, Any]) -> RLMChatCompletion:
         """Bypass REPL - direct LLM chat completion for short contexts."""
