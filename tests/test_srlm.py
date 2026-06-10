@@ -300,6 +300,131 @@ class TestCandidateTemperature:
         assert all(t is None for t in captured_temps)
 
 
+class TestCandidateSpawning:
+    def _srlm(self, **extra):
+        return SRLM(
+            backend="openai",
+            backend_kwargs={
+                "model_name": "test",
+                "base_url": "http://localhost:9999/v1",
+                "default_extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
+            },
+            n_candidates=2,
+            **extra,
+        )
+
+    def test_candidate_parallel_default_is_sequential(self):
+        assert self._srlm().candidate_parallel == 1
+
+    def test_accepts_candidate_parallel(self):
+        assert self._srlm(candidate_parallel=2).candidate_parallel == 2
+
+    def test_spawn_returns_fresh_rlm_with_own_state(self):
+        srlm = self._srlm(candidate_temperature=0.8)
+        cand = srlm._spawn_candidate_rlm(0)
+        assert isinstance(cand, RLM)
+        assert cand is not srlm
+        assert cand.logger is not None
+        assert cand.logger is not srlm.logger
+        assert cand.backend_kwargs is not srlm.backend_kwargs
+
+    def test_spawn_injects_temperature_without_touching_parent(self):
+        srlm = self._srlm(candidate_temperature=0.8)
+        cand = srlm._spawn_candidate_rlm(0)
+        assert cand.backend_kwargs["default_extra_body"]["temperature"] == 0.8
+        # parent kwargs and nested extra_body untouched
+        assert "temperature" not in srlm.backend_kwargs["default_extra_body"]
+        # pre-existing extra_body keys preserved on the candidate
+        assert cand.backend_kwargs["default_extra_body"]["chat_template_kwargs"] == {
+            "enable_thinking": False
+        }
+
+    def test_spawn_no_temperature_when_none(self):
+        srlm = self._srlm()
+        cand = srlm._spawn_candidate_rlm(0)
+        assert "temperature" not in cand.backend_kwargs.get("default_extra_body", {})
+
+    def test_spawn_preserves_core_config(self):
+        srlm = SRLM(
+            backend="openai",
+            backend_kwargs={"model_name": "test", "base_url": "http://localhost:9999/v1"},
+            n_candidates=2,
+            max_iterations=7,
+            max_depth=2,
+            child_system_prompt="worker prompt",
+        )
+        cand = srlm._spawn_candidate_rlm(1)
+        assert cand.max_iterations == 7
+        assert cand.max_depth == 2
+        assert cand.child_system_prompt == "worker prompt"
+        assert cand.system_prompt == srlm.system_prompt
+
+    def test_parent_kwargs_never_mutated_during_run(self):
+        """The old implementation temporarily wrote temperature into shared
+        backend_kwargs - racy under parallel candidates. The parent's kwargs
+        must stay untouched even while candidates run."""
+        srlm = self._srlm(candidate_temperature=0.8)
+        observed_parent_extra = []
+
+        def mock_completion(self_inner, prompt, root_prompt=None):
+            observed_parent_extra.append(
+                dict(srlm.backend_kwargs.get("default_extra_body", {}))
+            )
+            return _make_completion("42", 1.0)
+
+        import unittest.mock
+        with unittest.mock.patch.object(RLM, "completion", mock_completion):
+            srlm.completion("x" * 10)
+
+        for extra in observed_parent_extra:
+            assert "temperature" not in extra
+
+    def test_parallel_candidates_run_concurrently(self):
+        """With candidate_parallel=2, both candidates must be in flight at
+        once - a barrier that only releases when 2 threads arrive proves it
+        (sequential execution would deadlock until the barrier timeout)."""
+        import threading
+
+        barrier = threading.Barrier(2, timeout=10)
+
+        def mock_completion(self_inner, prompt, root_prompt=None):
+            barrier.wait()
+            return _make_completion("42", 1.0)
+
+        srlm = self._srlm(candidate_parallel=2)
+        import unittest.mock
+        with unittest.mock.patch.object(RLM, "completion", mock_completion):
+            result = srlm.completion("x" * 10)
+        assert result.response == "42"
+
+    def test_failed_candidate_dropped_not_fatal(self):
+        """One crashing candidate must not lose the others' work."""
+        calls = {"n": 0}
+
+        def mock_completion(self_inner, prompt, root_prompt=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("teacher hiccup")
+            return _make_completion("42", 1.0)
+
+        srlm = self._srlm()
+        import unittest.mock
+        with unittest.mock.patch.object(RLM, "completion", mock_completion):
+            result = srlm.completion("x" * 10)
+        assert result.response == "42"
+
+    def test_all_candidates_failing_raises(self):
+        def mock_completion(self_inner, prompt, root_prompt=None):
+            raise RuntimeError("teacher down")
+
+        srlm = self._srlm()
+        import unittest.mock
+        import pytest
+        with unittest.mock.patch.object(RLM, "completion", mock_completion):
+            with pytest.raises(RuntimeError):
+                srlm.completion("x" * 10)
+
+
 # --- Verbalized confidence & joint scoring tests ---
 
 import math

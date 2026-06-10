@@ -9,12 +9,13 @@ from __future__ import annotations
 import math
 import re
 import time
-from dataclasses import dataclass, field
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from lm_repl.clients import get_client
 from lm_repl.core.rlm import RLM
-from lm_repl.core.types import RLMChatCompletion, UsageSummary
+from lm_repl.core.types import RLMChatCompletion
+from lm_repl.logger import RLMLogger
 
 
 def _choose_mode(context_len: int, direct_threshold: int | None) -> str:
@@ -28,17 +29,6 @@ def _build_direct_messages(context: str, query: str) -> list[dict]:
         {"role": "system", "content": "Answer the question using only the provided context. Be concise."},
         {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {query}"},
     ]
-
-
-@dataclass
-class SRLMChatCompletion:
-    """Extends RLMChatCompletion with SRLM selection metadata."""
-    completion: RLMChatCompletion
-    mode: str = "rlm"
-    n_candidates: int = 1
-    n_consistent: int = 1
-    trace_tokens: int = 0
-    selected_index: int = 0
 
 
 class SRLM(RLM):
@@ -56,6 +46,7 @@ class SRLM(RLM):
         direct_threshold: int = 0,
         n_candidates: int = 1,
         candidate_temperature: float | None = None,
+        candidate_parallel: int = 1,
         confidence_elicitation: bool = False,
         **kwargs: Any,
     ):
@@ -63,6 +54,7 @@ class SRLM(RLM):
         self.direct_threshold = direct_threshold
         self.n_candidates = n_candidates
         self.candidate_temperature = candidate_temperature
+        self.candidate_parallel = candidate_parallel
         self.confidence_elicitation = confidence_elicitation
 
     def _direct_completion(self, prompt: str | dict[str, Any]) -> RLMChatCompletion:
@@ -116,27 +108,84 @@ class SRLM(RLM):
 
         return self._multi_trajectory_completion(prompt, root_prompt)
 
+    def _spawn_candidate_rlm(self, index: int) -> RLM:
+        """Fresh RLM for one candidate trajectory.
+
+        Each candidate gets its own logger (so trajectory metadata, and thus
+        VC scoring, is always captured) and its own copy of backend_kwargs
+        with candidate_temperature injected - no shared state is mutated, so
+        candidates are safe to run in parallel threads.
+        """
+        backend_kw = dict(self.backend_kwargs) if self.backend_kwargs else {}
+        extra = dict(backend_kw.get("default_extra_body") or {})
+        if self.candidate_temperature is not None:
+            extra["temperature"] = self.candidate_temperature
+        if extra:
+            backend_kw["default_extra_body"] = extra
+
+        if self.logger is not None and self.logger.log_dir:
+            logger = RLMLogger(log_dir=self.logger.log_dir, file_name=f"candidate_c{index}")
+        else:
+            logger = RLMLogger()
+
+        return RLM(
+            backend=self.backend,
+            backend_kwargs=backend_kw,
+            environment=self.environment_type,
+            environment_kwargs=dict(self.environment_kwargs),
+            depth=self.depth,
+            max_depth=self.max_depth,
+            max_iterations=self.max_iterations,
+            max_budget=self.max_budget,
+            max_timeout=self.max_timeout,
+            max_tokens=self.max_tokens,
+            max_errors=self.max_errors,
+            custom_system_prompt=self.system_prompt,
+            other_backends=self.other_backends,
+            other_backend_kwargs=self.other_backend_kwargs,
+            logger=logger,
+            verbose=self.verbose.enabled,
+            custom_tools=self.custom_tools,
+            custom_sub_tools=self.custom_sub_tools,
+            compaction=self.compaction,
+            compaction_threshold_pct=self.compaction_threshold_pct,
+            max_concurrent_subcalls=self.max_concurrent_subcalls,
+            on_subcall_start=self.on_subcall_start,
+            on_subcall_complete=self.on_subcall_complete,
+            on_iteration_start=self.on_iteration_start,
+            on_iteration_complete=self.on_iteration_complete,
+            child_max_iterations=self.child_max_iterations,
+            child_system_prompt=self.child_system_prompt,
+        )
+
     def _multi_trajectory_completion(
         self, prompt: str | dict[str, Any], root_prompt: str | None = None
     ) -> RLMChatCompletion:
-        """Generate K candidates and select the best by uncertainty signals."""
-        saved_extra = None
-        if self.candidate_temperature is not None and self.backend_kwargs:
-            saved_extra = self.backend_kwargs.get("default_extra_body")
-            merged = dict(saved_extra) if saved_extra else {}
-            merged["temperature"] = self.candidate_temperature
-            self.backend_kwargs["default_extra_body"] = merged
+        """Generate K candidates and select the best by uncertainty signals.
 
-        try:
-            candidates: list[RLMChatCompletion] = []
-            for _ in range(self.n_candidates):
-                result = super().completion(prompt, root_prompt)
-                candidates.append(result)
-        finally:
-            if saved_extra is not None and self.backend_kwargs:
-                self.backend_kwargs["default_extra_body"] = saved_extra
-            elif self.candidate_temperature is not None and self.backend_kwargs and "default_extra_body" in self.backend_kwargs:
-                self.backend_kwargs["default_extra_body"].pop("temperature", None)
+        Candidates run on fresh per-candidate RLM instances, in parallel when
+        candidate_parallel > 1. A failing candidate is dropped; only if every
+        candidate fails is the last error raised.
+        """
+        spawned = [self._spawn_candidate_rlm(i) for i in range(self.n_candidates)]
+
+        def _run(cand: RLM) -> RLMChatCompletion | Exception:
+            try:
+                return cand.completion(prompt, root_prompt)
+            except Exception as exc:  # noqa: BLE001 - candidate isolation
+                return exc
+
+        if self.candidate_parallel > 1:
+            workers = min(self.candidate_parallel, self.n_candidates)
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                outcomes = list(pool.map(_run, spawned))
+        else:
+            outcomes = [_run(cand) for cand in spawned]
+
+        candidates = [o for o in outcomes if isinstance(o, RLMChatCompletion)]
+        if not candidates:
+            errors = [o for o in outcomes if isinstance(o, Exception)]
+            raise errors[-1] if errors else RuntimeError("no candidate produced a completion")
 
         best = _select_best(candidates, use_confidence=self.confidence_elicitation)
         if best.metadata is None:
@@ -144,6 +193,7 @@ class SRLM(RLM):
         if isinstance(best.metadata, dict):
             best.metadata["mode"] = "rlm"
             best.metadata["n_candidates"] = self.n_candidates
+            best.metadata["n_completed"] = len(candidates)
         return best
 
 
