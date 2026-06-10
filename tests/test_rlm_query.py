@@ -4,8 +4,8 @@ import threading
 import time
 from unittest.mock import MagicMock
 
-from rlm.core.types import RLMChatCompletion, UsageSummary
-from rlm.environments.local_repl import LocalREPL
+from lm_repl.core.types import RLMChatCompletion, UsageSummary
+from lm_repl.environments.local_repl import LocalREPL
 
 
 def _make_completion(response: str) -> RLMChatCompletion:
@@ -77,31 +77,37 @@ class TestRlmQueryBatchedWithSubcallFn:
     """Tests for rlm_query_batched when subcall_fn is provided."""
 
     def test_batched_calls_subcall_fn_per_prompt(self):
-        """rlm_query_batched should call subcall_fn once per prompt."""
-        completions = [
-            _make_completion("answer 1"),
-            _make_completion("answer 2"),
-            _make_completion("answer 3"),
-        ]
-        subcall_fn = MagicMock(side_effect=completions)
+        """rlm_query_batched should call subcall_fn once per prompt and map
+        each answer back to its prompt's position.
+
+        side_effect is keyed on the prompt (not an ordered list) because
+        subcalls run in parallel threads with nondeterministic call order."""
+        subcall_fn = MagicMock(
+            side_effect=lambda prompt, *a, **kw: _make_completion(f"answer {prompt}")
+        )
         repl = LocalREPL(subcall_fn=subcall_fn)
         result = repl.execute_code(
             "answers = rlm_query_batched(['q1', 'q2', 'q3'])\nprint(len(answers))"
         )
         assert result.stderr == ""
         assert "3" in result.stdout
-        assert repl.locals["answers"] == ["answer 1", "answer 2", "answer 3"]
+        assert repl.locals["answers"] == ["answer q1", "answer q2", "answer q3"]
         assert subcall_fn.call_count == 3
         repl.cleanup()
 
     def test_batched_tracks_all_pending_calls(self):
-        """rlm_query_batched should track all completions in rlm_calls."""
-        completions = [_make_completion(f"resp {i}") for i in range(3)]
-        subcall_fn = MagicMock(side_effect=completions)
+        """rlm_query_batched should track all completions in rlm_calls.
+
+        Subcalls run in parallel threads, so an ordered side_effect list is
+        racy (whichever thread calls first consumes the first response).
+        Key responses on the prompt and compare as a set instead."""
+        subcall_fn = MagicMock(
+            side_effect=lambda prompt, *a, **kw: _make_completion(f"resp {prompt}")
+        )
         repl = LocalREPL(subcall_fn=subcall_fn)
         result = repl.execute_code("rlm_query_batched(['a', 'b', 'c'])")
         assert len(result.rlm_calls) == 3
-        assert [c.response for c in result.rlm_calls] == ["resp 0", "resp 1", "resp 2"]
+        assert {c.response for c in result.rlm_calls} == {"resp a", "resp b", "resp c"}
         repl.cleanup()
 
     def test_batched_with_model_override(self):
@@ -115,22 +121,24 @@ class TestRlmQueryBatchedWithSubcallFn:
         repl.cleanup()
 
     def test_batched_partial_failure(self):
-        """If one subcall_fn call fails, others should still succeed."""
-        subcall_fn = MagicMock(
-            side_effect=[
-                _make_completion("ok 1"),
-                RuntimeError("boom"),
-                _make_completion("ok 3"),
-            ]
-        )
+        """If one subcall_fn call fails, others should still succeed.
+
+        The failure is keyed on the prompt (not call order) because subcalls
+        run in parallel threads with nondeterministic call order."""
+        def _respond(prompt, *a, **kw):
+            if prompt == "b":
+                raise RuntimeError("boom")
+            return _make_completion(f"ok {prompt}")
+
+        subcall_fn = MagicMock(side_effect=_respond)
         repl = LocalREPL(subcall_fn=subcall_fn)
         result = repl.execute_code("answers = rlm_query_batched(['a', 'b', 'c'])")
         assert result.stderr == ""
         answers = repl.locals["answers"]
-        assert answers[0] == "ok 1"
+        assert answers[0] == "ok a"
         assert "Error" in answers[1]
         assert "boom" in answers[1]
-        assert answers[2] == "ok 3"
+        assert answers[2] == "ok c"
         repl.cleanup()
 
     def test_batched_empty_prompts(self):
