@@ -394,19 +394,11 @@ class RLM:
                         build_user_prompt(root_prompt, i, context_count, history_count)
                     ]
 
-                    try:
-                        iteration: RLMIteration = self._completion_turn(
-                            prompt=current_prompt,
-                            lm_handler=lm_handler,
-                            environment=environment,
-                        )
-                    except TimeoutExceededError as e:
-                        # Raised mid-turn by a client whose run deadline passed
-                        # (streamed root call); attach the best partial answer
-                        # the same way the between-iterations check does.
-                        if e.partial_answer is None:
-                            e.partial_answer = self._best_partial_answer
-                        raise
+                    iteration: RLMIteration = self._completion_turn(
+                        prompt=current_prompt,
+                        lm_handler=lm_handler,
+                        environment=environment,
+                    )
 
                     # Check error/budget/token limits after each iteration
                     self._check_iteration_limits(iteration, i, lm_handler)
@@ -467,10 +459,24 @@ class RLM:
                     partial_answer=self._best_partial_answer,
                     message="Execution cancelled by user (Ctrl+C)",
                 ) from None
+            except TimeoutExceededError as e:
+                # A client whose run deadline passed raises mid-stream WITHOUT
+                # a partial answer (it cannot see the run's accumulated state);
+                # attach it here so no timeout path loses the salvage.
+                if e.partial_answer is None:
+                    e.partial_answer = self._best_partial_answer
+                raise
 
             # Default behavior: we run out of iterations, provide one final answer
             time_end = time.perf_counter()
-            final_answer = self._default_answer(message_history, lm_handler)
+            try:
+                final_answer = self._default_answer(message_history, lm_handler)
+            except TimeoutExceededError as e:
+                # Same deadline abort, but during the final wrap-up generation
+                # after the iteration loop - the 2026-06-11 null-salvage path.
+                if e.partial_answer is None:
+                    e.partial_answer = self._best_partial_answer
+                raise
             usage = lm_handler.get_usage_summary()
             self.verbose.print_final_answer(final_answer)
             self.verbose.print_summary(self.max_iterations, time_end - time_start, usage.to_dict())
