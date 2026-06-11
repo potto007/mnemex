@@ -234,7 +234,9 @@ class LocalREPL(NonIsolatedEnv):
         self.locals["answer"] = _AnswerDict(on_ready=self._capture_answer)
 
         # Add custom tools to globals
-        # Tools can be either plain values or (value, description) tuples
+        # Entries are plain values or {"tool": value, "description": str} dicts
+        # (extract_tool_value unwraps ONLY the dict form; tuples pass through
+        # as literal tuples - they are NOT unpacked)
         for name, entry in self.custom_tools.items():
             value = extract_tool_value(entry)
             if callable(value):
