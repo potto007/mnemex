@@ -27,11 +27,18 @@ class MockLM(BaseLM):
         self._responses = list(responses) if responses is not None else None
         self._response_fn = response_fn
         self._call_count = 0
+        # Records the max_tokens kwarg of every call (None when not passed),
+        # so tests can assert the subcall_max_tokens plumbing.
+        self.seen_max_tokens: list[int | None] = []
 
     def completion(
-        self, prompt: str | dict[str, Any], priority: str | int | None = None
+        self,
+        prompt: str | dict[str, Any],
+        priority: str | int | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         self._call_count += 1
+        self.seen_max_tokens.append(max_tokens)
         if self._responses is not None:
             if not self._responses:
                 raise IndexError("MockLM: no more responses in list")
@@ -42,9 +49,12 @@ class MockLM(BaseLM):
         return f"Mock response to: {prompt_str}"
 
     async def acompletion(
-        self, prompt: str | dict[str, Any], priority: str | int | None = None
+        self,
+        prompt: str | dict[str, Any],
+        priority: str | int | None = None,
+        max_tokens: int | None = None,
     ) -> str:
-        return self.completion(prompt)
+        return self.completion(prompt, max_tokens=max_tokens)
 
     def get_usage_summary(self) -> UsageSummary:
         return UsageSummary(

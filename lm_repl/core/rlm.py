@@ -71,6 +71,7 @@ class RLM:
         compaction: bool = False,
         compaction_threshold_pct: float = 0.85,
         max_concurrent_subcalls: int = 4,
+        subcall_max_tokens: int | None = None,
         scheduler_max_concurrent: int | None = None,
         scheduler_aging_interval: float | None = 30.0,
         scheduler_coordination_dir: str | Path | None = None,
@@ -110,6 +111,10 @@ class RLM:
                 message token count reaches this fraction of the model context limit (default 0.85).
             max_concurrent_subcalls: Maximum number of parallel threads for rlm_query_batched subcalls.
                 Each child RLM runs in its own thread. Default 4.
+            subcall_max_tokens: Generation cap (max_tokens) applied to every llm_query /
+                llm_query_batched sub-call. Bounds runaway generations on greedy local models.
+                Root orchestrator calls are not capped. None (default) leaves sub-calls uncapped.
+                Requires a backend whose completion() accepts max_tokens (openai backend does).
             scheduler_max_concurrent: If set, create a priority RequestScheduler shared by all
                 backend clients, capping in-flight requests and enabling context-contention
                 retries at exclusive (p1) priority. Match this to the inference server's slot
@@ -153,6 +158,7 @@ class RLM:
         self.compaction = compaction
         self.compaction_threshold_pct = compaction_threshold_pct
         self.max_concurrent_subcalls = max_concurrent_subcalls
+        self.subcall_max_tokens = subcall_max_tokens
         self.scheduler_max_concurrent = scheduler_max_concurrent
         self.scheduler_aging_interval = scheduler_aging_interval
         self.scheduler_coordination_dir = scheduler_coordination_dir
@@ -233,6 +239,7 @@ class RLM:
             scheduler_max_concurrent=self.scheduler_max_concurrent,
             scheduler_aging_interval=self.scheduler_aging_interval,
             scheduler_coordination_dir=self.scheduler_coordination_dir,
+            subcall_max_tokens=self.subcall_max_tokens,
         )
 
         # Register other clients to be available as sub-call options (by model name).
@@ -249,6 +256,11 @@ class RLM:
                 lm_handler.register_client(other_client.model_name, other_client)
 
         lm_handler.start()
+        # Arm the run's wall-clock deadline on every client: streamed calls
+        # (stream=True backends) self-abort between chunks once it passes, so
+        # even a call that is mid-generation cannot block the run past
+        # max_timeout. No-op when max_timeout is None.
+        lm_handler.set_run_deadline(self.max_timeout)
 
         # Environment: reuse if persistent, otherwise create fresh
         if self.persistent and self._persistent_env is not None:
@@ -286,6 +298,11 @@ class RLM:
         try:
             yield lm_handler, environment
         finally:
+            # Abort in-flight sub-calls BEFORE stopping the server: handler
+            # request threads are daemon threads, so without this a sub-call
+            # abandoned by a timeout keeps generating (and SDK-retrying)
+            # against the backend long after the run has returned.
+            lm_handler.cancel_inflight()
             lm_handler.stop()
             if not self.persistent and hasattr(environment, "cleanup"):
                 environment.cleanup()
@@ -377,11 +394,19 @@ class RLM:
                         build_user_prompt(root_prompt, i, context_count, history_count)
                     ]
 
-                    iteration: RLMIteration = self._completion_turn(
-                        prompt=current_prompt,
-                        lm_handler=lm_handler,
-                        environment=environment,
-                    )
+                    try:
+                        iteration: RLMIteration = self._completion_turn(
+                            prompt=current_prompt,
+                            lm_handler=lm_handler,
+                            environment=environment,
+                        )
+                    except TimeoutExceededError as e:
+                        # Raised mid-turn by a client whose run deadline passed
+                        # (streamed root call); attach the best partial answer
+                        # the same way the between-iterations check does.
+                        if e.partial_answer is None:
+                            e.partial_answer = self._best_partial_answer
+                        raise
 
                     # Check error/budget/token limits after each iteration
                     self._check_iteration_limits(iteration, i, lm_handler)

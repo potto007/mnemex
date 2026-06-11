@@ -1,6 +1,9 @@
 import logging
 import os
+import threading
+import time
 from collections import defaultdict
+from types import SimpleNamespace
 from typing import Any
 
 import openai
@@ -9,6 +12,7 @@ from dotenv import load_dotenv
 from lm_repl.clients.base_lm import BaseLM
 from lm_repl.clients.scheduler import Priority, RequestScheduler, resolve_priority
 from lm_repl.core.types import ModelUsageSummary, UsageSummary
+from lm_repl.utils.exceptions import CancellationError, TimeoutExceededError
 
 log = logging.getLogger(__name__)
 
@@ -101,9 +105,25 @@ class OpenAIClient(BaseLM):
         base_url: str | None = None,
         default_extra_body: dict[str, Any] | None = None,
         scheduler: RequestScheduler | None = None,
+        stream: bool = False,
         **kwargs,
     ):
         super().__init__(model_name=model_name, **kwargs)
+        # Streamed completions (opt-in): content is assembled from chunks and the
+        # call checks cancel_event/deadline between chunks, so an abandoned or
+        # over-deadline generation is abandoned client-side AND the server sees
+        # the disconnect and frees its slot (non-streaming servers only notice a
+        # dead client when the full response is written). Recommended for local
+        # single-server backends (llama-server).
+        self.stream = stream
+        # Cooperative cancellation: the owning run (RLM) sets this to abort every
+        # in-flight and queued call of this client; checked between stream chunks.
+        self.cancel_event = threading.Event()
+        # Optional wall-clock deadline for the whole run (set_deadline); enforced
+        # between stream chunks so even a mid-generation call stops on time.
+        self._deadline: float | None = None
+        self._run_started: float | None = None
+        self._max_timeout: float | None = None
         # Per-request body fields merged into every call (e.g. {"chat_template_kwargs":
         # {"enable_thinking": False}} to disable gemma CoT on the recursive sub-call backend
         # while the root orchestrator keeps thinking). Not an OpenAI client ctor arg, so it is a
@@ -141,12 +161,37 @@ class OpenAIClient(BaseLM):
         self.model_total_tokens: dict[str, int] = defaultdict(int)
         self.model_costs: dict[str, float] = defaultdict(float)  # Cost in USD
 
+    def set_deadline(self, max_timeout: float | None) -> None:
+        """Arm (or clear) a wall-clock deadline for every call on this client.
+
+        Set by the owning RLM run from its max_timeout; enforced between stream
+        chunks (stream=True), so a mid-generation call aborts on time instead of
+        blocking the run past its budget."""
+        if max_timeout is None:
+            self._deadline = self._run_started = self._max_timeout = None
+            return
+        self._run_started = time.monotonic()
+        self._deadline = self._run_started + max_timeout
+        self._max_timeout = max_timeout
+
+    def _check_abort(self) -> None:
+        """Raise if the run was cancelled or its deadline passed."""
+        if self.cancel_event.is_set():
+            raise CancellationError(message="LM call aborted: run cancelled")
+        if self._deadline is not None and time.monotonic() > self._deadline:
+            raise TimeoutExceededError(
+                elapsed=time.monotonic() - self._run_started,
+                timeout=self._max_timeout,
+                message=f"LM call aborted at run deadline ({self._max_timeout:.1f}s)",
+            )
+
     def completion(
         self,
         prompt: str | list[dict[str, Any]],
         model: str | None = None,
         response_format: dict[str, Any] | None = None,
         priority: str | int | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         if isinstance(prompt, str):
             messages = [{"role": "user", "content": prompt}]
@@ -166,6 +211,8 @@ class OpenAIClient(BaseLM):
         create_kwargs: dict[str, Any] = {}
         if response_format is not None:
             create_kwargs["response_format"] = response_format
+        if max_tokens is not None:
+            create_kwargs["max_tokens"] = max_tokens
 
         p = resolve_priority(priority)
         return self._do_completion(model, messages, extra_body, create_kwargs, p)
@@ -185,6 +232,11 @@ class OpenAIClient(BaseLM):
             if self.scheduler:
                 self.scheduler.acquire(acquired)
             try:
+                # A call that was queued (scheduler) past cancellation/deadline
+                # must not start a fresh generation.
+                self._check_abort()
+                if self.stream:
+                    return self._stream_completion(model, messages, extra_body, create_kwargs)
                 response = self.client.chat.completions.create(
                     model=model, messages=messages, extra_body=extra_body, **create_kwargs
                 )
@@ -204,11 +256,45 @@ class OpenAIClient(BaseLM):
                 if self.scheduler:
                     self.scheduler.release(acquired)
 
+    def _stream_completion(
+        self,
+        model: str,
+        messages: list[dict[str, Any]],
+        extra_body: dict[str, Any],
+        create_kwargs: dict[str, Any],
+    ) -> str:
+        stream = self.client.chat.completions.create(
+            model=model,
+            messages=messages,
+            extra_body=extra_body,
+            stream=True,
+            stream_options={"include_usage": True},
+            **create_kwargs,
+        )
+        parts: list[str] = []
+        usage = None
+        try:
+            for chunk in stream:
+                self._check_abort()
+                if chunk.choices:
+                    delta = chunk.choices[0].delta
+                    if delta is not None and delta.content:
+                        parts.append(delta.content)
+                if getattr(chunk, "usage", None) is not None:
+                    usage = chunk.usage
+        finally:
+            # On abort this closes the HTTP stream; llama-server notices the
+            # disconnect and frees the slot instead of generating to completion.
+            stream.close()
+        self._track_cost(SimpleNamespace(usage=usage), model)
+        return "".join(parts)
+
     async def acompletion(
         self,
         prompt: str | list[dict[str, Any]],
         model: str | None = None,
         priority: str | int | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         if isinstance(prompt, str):
             messages = [{"role": "user", "content": prompt}]
@@ -225,14 +311,19 @@ class OpenAIClient(BaseLM):
         if self.client.base_url == DEFAULT_PRIME_INTELLECT_BASE_URL:
             extra_body["usage"] = {"include": True}
 
+        create_kwargs: dict[str, Any] = {}
+        if max_tokens is not None:
+            create_kwargs["max_tokens"] = max_tokens
+
         p = resolve_priority(priority)
-        return await self._ado_completion(model, messages, extra_body, p)
+        return await self._ado_completion(model, messages, extra_body, create_kwargs, p)
 
     async def _ado_completion(
         self,
         model: str,
         messages: list[dict[str, Any]],
         extra_body: dict[str, Any],
+        create_kwargs: dict[str, Any],
         priority: int,
     ) -> str:
         while True:
@@ -240,8 +331,13 @@ class OpenAIClient(BaseLM):
             if self.scheduler:
                 await self.scheduler.aacquire(acquired)
             try:
+                self._check_abort()
+                if self.stream:
+                    return await self._astream_completion(
+                        model, messages, extra_body, create_kwargs
+                    )
                 response = await self.async_client.chat.completions.create(
-                    model=model, messages=messages, extra_body=extra_body
+                    model=model, messages=messages, extra_body=extra_body, **create_kwargs
                 )
                 self._track_cost(response, model)
                 return response.choices[0].message.content
@@ -258,6 +354,37 @@ class OpenAIClient(BaseLM):
             finally:
                 if self.scheduler:
                     await self.scheduler.arelease(acquired)
+
+    async def _astream_completion(
+        self,
+        model: str,
+        messages: list[dict[str, Any]],
+        extra_body: dict[str, Any],
+        create_kwargs: dict[str, Any],
+    ) -> str:
+        stream = await self.async_client.chat.completions.create(
+            model=model,
+            messages=messages,
+            extra_body=extra_body,
+            stream=True,
+            stream_options={"include_usage": True},
+            **create_kwargs,
+        )
+        parts: list[str] = []
+        usage = None
+        try:
+            async for chunk in stream:
+                self._check_abort()
+                if chunk.choices:
+                    delta = chunk.choices[0].delta
+                    if delta is not None and delta.content:
+                        parts.append(delta.content)
+                if getattr(chunk, "usage", None) is not None:
+                    usage = chunk.usage
+        finally:
+            await stream.close()
+        self._track_cost(SimpleNamespace(usage=usage), model)
+        return "".join(parts)
 
     def _track_cost(self, response: openai.ChatCompletion, model: str):
         self.model_call_counts[model] += 1

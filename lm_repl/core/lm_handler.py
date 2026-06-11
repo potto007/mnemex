@@ -67,7 +67,9 @@ class LMRequestHandler(StreamRequestHandler):
         client = handler.get_client(request.model, request.depth)
 
         start_time = time.perf_counter()
-        content = client.completion(request.prompt, priority=request.priority)
+        content = client.completion(
+            request.prompt, priority=request.priority, **handler.subcall_kwargs()
+        )
         end_time = time.perf_counter()
 
         model_usage = client.get_last_usage()
@@ -89,17 +91,22 @@ class LMRequestHandler(StreamRequestHandler):
 
         start_time = time.perf_counter()
 
+        subcall_kwargs = handler.subcall_kwargs()
         if getattr(client, "scheduler", None) is not None:
             # The client's RequestScheduler already bounds concurrency (and adds priority
             # ordering), so a semaphore on top would only fight its queue.
             async def run_one(prompt: str):
-                return await client.acompletion(prompt, priority=request.priority)
+                return await client.acompletion(
+                    prompt, priority=request.priority, **subcall_kwargs
+                )
         else:
             sem = asyncio.Semaphore(handler.batch_max_concurrent)
 
             async def run_one(prompt: str):
                 async with sem:
-                    return await client.acompletion(prompt, priority=request.priority)
+                    return await client.acompletion(
+                        prompt, priority=request.priority, **subcall_kwargs
+                    )
 
         async def run_all():
             tasks = [run_one(prompt) for prompt in request.prompts]
@@ -152,6 +159,7 @@ class LMHandler:
         scheduler_max_concurrent: int | None = None,
         scheduler_aging_interval: float | None = 30.0,
         scheduler_coordination_dir: str | Path | None = None,
+        subcall_max_tokens: int | None = None,
     ):
         self.default_client = client
         self.other_backend_client = other_backend_client
@@ -161,6 +169,12 @@ class LMHandler:
         self._thread: Thread | None = None
         self._port = port
         self.batch_max_concurrent = batch_max_concurrent
+        # Generation cap applied to every SUB-call served over the socket
+        # (llm_query / llm_query_batched). Bounds runaway generations - a
+        # degenerate greedy loop otherwise generates until the context fills.
+        # Root orchestrator calls (LMHandler.completion) are NOT capped. The
+        # client's completion() must accept max_tokens when this is set.
+        self.subcall_max_tokens = subcall_max_tokens
 
         # One scheduler shared by every client that targets the same server, so the
         # priority queue (and p1 exclusivity) spans all traffic. Match
@@ -246,6 +260,36 @@ class LMHandler:
             self._server.shutdown()
             self._server = None
             self._thread = None
+
+    def subcall_kwargs(self) -> dict:
+        """Extra completion() kwargs applied to socket-served sub-calls."""
+        if self.subcall_max_tokens is not None:
+            return {"max_tokens": self.subcall_max_tokens}
+        return {}
+
+    def _all_clients(self) -> list[BaseLM]:
+        seen: dict[int, BaseLM] = {}
+        for c in (self.default_client, self.other_backend_client, *self.clients.values()):
+            if c is not None:
+                seen[id(c)] = c
+        return list(seen.values())
+
+    def set_run_deadline(self, max_timeout: float | None) -> None:
+        """Arm a wall-clock deadline on every client that supports one."""
+        for c in self._all_clients():
+            if hasattr(c, "set_deadline"):
+                c.set_deadline(max_timeout)
+
+    def cancel_inflight(self) -> None:
+        """Abort in-flight and queued LM calls on every cancellable client.
+
+        stop() only shuts the socket server down; request threads already blocked
+        in a client call are daemon threads that would otherwise keep generating
+        (and retrying) long after the run ended."""
+        for c in self._all_clients():
+            event = getattr(c, "cancel_event", None)
+            if event is not None:
+                event.set()
 
     def completion(self, prompt: str, model: str | None = None) -> str:
         """Direct completion call (for main process use)."""
