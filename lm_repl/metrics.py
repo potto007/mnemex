@@ -220,9 +220,10 @@ class PrometheusLogger:
 class _ConcurrencyTracker:
     """Per-process running totals of child RLMs in flight.
 
-    Per-root-call max-depth and fanout are tracked elsewhere via CallScope;
-    this tracker is only for the global concurrent_children gauge and for
-    counting completed children for calls_total.
+    Also fans subcall_start events out to every currently-open CallScope so
+    per-root max-depth and fanout get observed at scope exit. With concurrent
+    asks the attribution overcounts (each scope sees every subcall on the
+    process); kb-librarian's max_concurrent_asks of 2 keeps the bias small.
     """
 
     def __init__(self) -> None:
@@ -232,6 +233,12 @@ class _ConcurrencyTracker:
         concurrent_children.inc()
         calls_in_flight.labels(kind="child").inc()
         subcall_depth.observe(depth)
+        # Propagate to every open root-call scope (process-local).
+        with CallScope._active_lock:
+            for scope in CallScope._active:
+                if depth > scope._max_depth_seen:
+                    scope._max_depth_seen = depth
+                scope._fanout += 1
 
     def on_subcall_complete(
         self, depth: int, model: str, duration: float, error_msg: str | None
@@ -298,14 +305,15 @@ def _on_iteration_complete(depth: int, iteration_num: int, duration: float) -> N
 class CallScope(AbstractContextManager):
     """Wrap a root RLM call to capture per-call metrics.
 
-    Tracks calls_in_flight at the root kind, call_duration_seconds, and the
-    context_chars histogram. The model label is read from
-    `rlm.backend_kwargs["model_name"]` if not explicitly provided.
-
-    Per-root-call max-depth and fanout aren't tracked here because they need
-    visibility into the child RLM tree, which only the callbacks have. The
-    histograms `subcall_depth` and `concurrent_children` cover that surface.
+    Tracks calls_in_flight at the root kind, call_duration_seconds, context
+    size, root_max_depth and root_fanout. Per-root max-depth/fanout come from
+    on_subcall_start fan-out into the active-scope set (see _ConcurrencyTracker).
+    The model label is read from `rlm.backend_kwargs["model_name"]` if not
+    explicitly provided.
     """
+
+    _active: "set[CallScope]" = set()
+    _active_lock = threading.Lock()
 
     def __init__(self, rlm, *, prompt: str | None = None, model_label: str | None = None) -> None:
         self._rlm = rlm
@@ -317,6 +325,8 @@ class CallScope(AbstractContextManager):
         self._start: float = 0.0
         self._outcome = "success"
         self._error_class = "none"
+        self._max_depth_seen = 0
+        self._fanout = 0
 
     def __enter__(self) -> "CallScope":
         calls_in_flight.labels(kind="root").inc()
@@ -325,6 +335,8 @@ class CallScope(AbstractContextManager):
                 context_chars.observe(len(self._prompt))
             except Exception:
                 callback_failures_total.inc()
+        with CallScope._active_lock:
+            CallScope._active.add(self)
         self._start = time.perf_counter()
         return self
 
@@ -342,12 +354,16 @@ class CallScope(AbstractContextManager):
                 "timeout" if exc_type and "Timeout" in exc_type.__name__ else "error"
             )
             self._error_class = (exc_type.__name__ if exc_type else "Exception")[:48]
+        with CallScope._active_lock:
+            CallScope._active.discard(self)
         calls_in_flight.labels(kind="root").dec()
         srlm_candidates_in_flight.set(0)
         calls_total.labels(kind="root", model=self._model, outcome=self._outcome).inc()
         call_duration_seconds.labels(
             kind="root", model=self._model, outcome=self._outcome
         ).observe(duration)
+        root_max_depth.observe(self._max_depth_seen)
+        root_fanout.observe(self._fanout)
         if self._outcome == "error":
             errors_total.labels(kind="root", error_type=self._error_class).inc()
         elif self._outcome == "timeout":

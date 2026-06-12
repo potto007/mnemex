@@ -440,11 +440,24 @@ class RLM:
                         build_user_prompt(root_prompt, i, context_count, history_count)
                     ]
 
+                    if self.on_iteration_start:
+                        try:
+                            self.on_iteration_start(self.depth, i)
+                        except Exception:
+                            pass
+                    iter_t0 = time.perf_counter()
                     iteration: RLMIteration = self._completion_turn(
                         prompt=current_prompt,
                         lm_handler=lm_handler,
                         environment=environment,
                     )
+                    if self.on_iteration_complete:
+                        try:
+                            self.on_iteration_complete(
+                                self.depth, i, time.perf_counter() - iter_t0
+                            )
+                        except Exception:
+                            pass
 
                     # Check error/budget/token limits after each iteration
                     self._check_iteration_limits(iteration, i, lm_handler)
