@@ -473,6 +473,11 @@ class TestSubcallGuardPropagation:
         captured = _capture_child_kwargs({"subcall_max_tokens": 4096})
         assert captured.get("subcall_max_tokens") == 4096
 
+    def test_child_receives_root_max_tokens(self):
+        """A child's root iterations are as runaway-prone as the parent's."""
+        captured = _capture_child_kwargs({"root_max_tokens": 8192})
+        assert captured.get("root_max_tokens") == 8192
+
     def test_child_receives_scheduler_settings(self, tmp_path):
         captured = _capture_child_kwargs(
             {

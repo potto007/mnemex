@@ -43,12 +43,49 @@ def test_no_cap_by_default():
     assert mock.seen_max_tokens == [None]
 
 
-def test_root_completion_not_capped():
-    """Direct LMHandler.completion (the root orchestrator path) is uncapped."""
+def test_root_completion_not_capped_by_subcall_limit():
+    """subcall_max_tokens does not touch the root orchestrator path."""
     mock = MockLM(responses=["ok"])
     handler = LMHandler(client=mock, subcall_max_tokens=128)
     assert handler.completion("root prompt") == "ok"
     assert mock.seen_max_tokens == [None]
+
+
+def test_root_completion_capped_by_root_limit():
+    """root_max_tokens bounds root orchestrator generations: the forced final
+    REDUCE on 2026-06-11 ran away to ~50K tokens (n_tokens 65024 at deadline
+    cancel) because the root path had no cap at all."""
+    mock = MockLM(responses=["ok"])
+    handler = LMHandler(client=mock, subcall_max_tokens=128, root_max_tokens=8192)
+    assert handler.completion("root prompt") == "ok"
+    assert mock.seen_max_tokens == [8192]
+
+
+def test_root_limit_does_not_leak_into_subcalls():
+    """Sub-calls keep their own (tighter) cap when both are set."""
+    mock = MockLM(responses=["ok"])
+    with LMHandler(client=mock, subcall_max_tokens=128, root_max_tokens=8192) as handler:
+        response = send_lm_request(handler.address, LMRequest(prompt="hi"))
+    assert response.success
+    assert mock.seen_max_tokens == [128]
+
+
+def test_rlm_wires_root_max_tokens_through_to_root_calls():
+    import lm_repl.core.rlm as rlm_module
+    from lm_repl import RLM
+    from tests.test_subcall import create_mock_lm, final
+
+    with patch.object(rlm_module, "get_client") as mock_get_client:
+        mock_lm = create_mock_lm([final("answer")])
+        mock_get_client.return_value = mock_lm
+        rlm = RLM(
+            backend="openai",
+            backend_kwargs={"model_name": "m"},
+            root_max_tokens=8192,
+        )
+        rlm.completion("context", root_prompt="q")
+        root_call_kwargs = mock_lm.completion.call_args_list[0].kwargs
+        assert root_call_kwargs.get("max_tokens") == 8192
 
 
 # ---------------------------------------------------------------------------

@@ -75,6 +75,7 @@ class RLM:
         subcall_max_tokens: int | None = None,
         subcall_max_timeout: float | None = None,
         subcall_verifier: SubcallVerifier | None = None,
+        root_max_tokens: int | None = None,
         scheduler_max_concurrent: int | None = None,
         scheduler_aging_interval: float | None = 30.0,
         scheduler_coordination_dir: str | Path | None = None,
@@ -131,6 +132,12 @@ class RLM:
                 is shared with recursion children so resubmission memory and
                 veto telemetry span the whole tree. None (default) disables
                 review.
+            root_max_tokens: Generation cap for ROOT orchestrator calls,
+                including the forced final answer after iteration exhaustion.
+                Bounds root-path runaway generations the way subcall_max_tokens
+                bounds sub-calls. Set generously (real answers run a few
+                thousand tokens). Inherited by recursion children. None
+                (default) leaves root calls uncapped.
             scheduler_max_concurrent: If set, create a priority RequestScheduler shared by all
                 backend clients, capping in-flight requests and enabling context-contention
                 retries at exclusive (p1) priority. Match this to the inference server's slot
@@ -177,6 +184,7 @@ class RLM:
         self.subcall_max_tokens = subcall_max_tokens
         self.subcall_max_timeout = subcall_max_timeout
         self.subcall_verifier = subcall_verifier
+        self.root_max_tokens = root_max_tokens
         # The task this RLM was given, as seen by the verifier's whole-task
         # rule. Set per completion(); children record their delegated prompt.
         self._verifier_root: str | None = None
@@ -261,6 +269,7 @@ class RLM:
             scheduler_aging_interval=self.scheduler_aging_interval,
             scheduler_coordination_dir=self.scheduler_coordination_dir,
             subcall_max_tokens=self.subcall_max_tokens,
+            root_max_tokens=self.root_max_tokens,
             verifier=self.subcall_verifier,
             verifier_root=self._verifier_root,
         )
@@ -888,6 +897,7 @@ class RLM:
             # configuring them on the root.
             subcall_max_tokens=self.subcall_max_tokens,
             subcall_max_timeout=self.subcall_max_timeout,
+            root_max_tokens=self.root_max_tokens,
             # The SAME instance, not a copy: resubmission memory and veto
             # telemetry must span the recursion tree.
             subcall_verifier=self.subcall_verifier,

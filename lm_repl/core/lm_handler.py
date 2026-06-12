@@ -188,6 +188,7 @@ class LMHandler:
         scheduler_aging_interval: float | None = 30.0,
         scheduler_coordination_dir: str | Path | None = None,
         subcall_max_tokens: int | None = None,
+        root_max_tokens: int | None = None,
         verifier: SubcallVerifier | None = None,
         verifier_root: str | None = None,
     ):
@@ -202,9 +203,16 @@ class LMHandler:
         # Generation cap applied to every SUB-call served over the socket
         # (llm_query / llm_query_batched). Bounds runaway generations - a
         # degenerate greedy loop otherwise generates until the context fills.
-        # Root orchestrator calls (LMHandler.completion) are NOT capped. The
-        # client's completion() must accept max_tokens when this is set.
+        # Root orchestrator calls (LMHandler.completion) are NOT capped by
+        # subcall_max_tokens. The client's completion() must accept max_tokens
+        # when this is set.
         self.subcall_max_tokens = subcall_max_tokens
+        # Generation cap for ROOT orchestrator calls. The forced final REDUCE
+        # after iteration exhaustion is also a root call - uncapped, it ran
+        # away to ~50K tokens on 2026-06-11 (n_tokens 65024 at deadline
+        # cancel), eating 9 of a 10-minute ask. Set generously: real final
+        # answers run a few thousand tokens; only runaways hit this.
+        self.root_max_tokens = root_max_tokens
         # Strategy verifier: reviews every llm_query sub-call served over the
         # socket before it executes. verifier_root is the task the calling RLM
         # was given, so the whole-task-delegation rule has something to
@@ -345,6 +353,8 @@ class LMHandler:
 
     def completion(self, prompt: str, model: str | None = None) -> str:
         """Direct completion call (for main process use)."""
+        if self.root_max_tokens is not None:
+            return self.get_client(model).completion(prompt, max_tokens=self.root_max_tokens)
         return self.get_client(model).completion(prompt)
 
     def __enter__(self):
