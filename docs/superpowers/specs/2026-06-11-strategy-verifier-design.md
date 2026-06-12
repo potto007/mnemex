@@ -31,10 +31,13 @@ timeout exhaustion. The orchestrator adapts on its next iteration.
 - `Verdict` - `approved: bool`, `reason: str`.
 - `SubcallVerifier` - protocol: `review(call) -> Verdict`. Anything
   implementing it can be plugged in.
-- `RuleVerifier` - deterministic checks, applied to every kind:
-  - **Whole-task delegation**: the sub-call prompt contains the root task
-    (normalized containment), or shares the bulk of its 8-word shingles with
-    it. Delegating your entire task to a copy of yourself is never a strategy.
+- `RuleVerifier` - deterministic checks:
+  - **Whole-task delegation** (`rlm_query` only): the sub-call prompt contains
+    the root task (normalized containment), or shares the bulk of its 8-word
+    shingles with it. Delegating your entire task to an unbounded child copy
+    of yourself is never a strategy. `llm_query` is exempt: it is already
+    capped by `subcall_max_tokens`, and manifest triage legitimately quotes
+    the full question next to the catalog.
 - `LMVerifier` - devil's-advocate LM judgment, `rlm_query` only. Same backend
   as the run (a different model would thrash a `--models-max 1` router),
   output capped (default 256 tokens), JSON verdict parsed leniently.
@@ -43,7 +46,9 @@ timeout exhaustion. The orchestrator adapts on its next iteration.
 - `TieredVerifier` - the composition, and the only stateful piece:
   1. Resubmission check: a prompt that was already vetoed (by any layer) is
      re-vetoed immediately with an escalating message - the second attempt is
-     told it MUST change strategy. No LM re-review for resubmissions.
+     told it MUST change strategy. No LM re-review for resubmissions. Veto
+     memory is keyed by (kind, prompt): downgrading a vetoed rlm_query to a
+     capped llm_query is compliance, not resubmission.
   2. `RuleVerifier` on every call.
   3. `LMVerifier` on `rlm_query` calls only (when configured).
   Records every veto in `.vetoes` (kind, prompt preview, reason, attempt) for

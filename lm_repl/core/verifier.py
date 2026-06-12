@@ -68,6 +68,12 @@ class RuleVerifier:
     """Deterministic checks. Free: no LM call, applied to every sub-call."""
 
     def review(self, call: SubcallReview) -> Verdict:
+        # The whole-task veto targets rlm_query only: a child RLM re-running
+        # the task is unbounded work, while an llm_query is already capped by
+        # subcall_max_tokens - and legitimately quotes the full question for
+        # manifest triage ("pick relevant doc ids for: <question>").
+        if call.kind != "rlm_query":
+            return Verdict(approved=True)
         root = _normalize(call.root_prompt or "")
         if len(root) < _MIN_ROOT_CHARS:
             return Verdict(approved=True)
@@ -168,11 +174,13 @@ class TieredVerifier:
     vetoes: list[dict] = field(default_factory=list)
 
     def __post_init__(self):
-        self._vetoed: dict[str, tuple[int, str]] = {}  # norm prompt -> (count, first reason)
+        # Keyed by (kind, normalized prompt): downgrading a vetoed rlm_query
+        # to a capped llm_query is compliance, not resubmission.
+        self._vetoed: dict[tuple[str, str], tuple[int, str]] = {}
         self._lock = threading.Lock()
 
     def review(self, call: SubcallReview) -> Verdict:
-        norm = _normalize(call.prompt)
+        norm = (call.kind, _normalize(call.prompt))
         with self._lock:
             if norm in self._vetoed:
                 count, first_reason = self._vetoed[norm]

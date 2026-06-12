@@ -70,6 +70,23 @@ class TestRuleVerifier:
         )
         assert verdict.approved
 
+    def test_llm_query_quoting_whole_root_is_approved(self):
+        """Manifest triage legitimately quotes the full question next to the
+        catalog ('pick relevant doc ids for: <question>'). llm_query is
+        already bounded by subcall_max_tokens; only rlm_query (an unbounded
+        child re-running the task) gets the whole-task veto."""
+        prompt = f"Pick the most relevant doc ids from this manifest for:\n{ROOT}\n<manifest>"
+        verdict = RuleVerifier().review(review(prompt, kind="llm_query"))
+        assert verdict.approved
+
+    def test_rlm_query_after_vetoed_same_prompt_as_llm_query_is_fresh(self):
+        """Downgrading a vetoed rlm_query to a capped llm_query is compliance,
+        not resubmission: veto memory is scoped per call kind."""
+        tiered = TieredVerifier(rules=RuleVerifier())
+        prompt = f"Analyze: {ROOT}"
+        assert not tiered.review(review(prompt, kind="rlm_query")).approved
+        assert tiered.review(review(prompt, kind="llm_query")).approved
+
 
 # ---------------------------------------------------------------------------
 # LMVerifier
@@ -246,13 +263,22 @@ class TestRLMWiring:
 # ---------------------------------------------------------------------------
 
 
+class _VetoMarked:
+    """Stub verifier: vetoes any prompt containing 'VETO-ME'. Wiring tests
+    use this so they exercise plumbing, not rule policy."""
+
+    def review(self, call):
+        if "VETO-ME" in call.prompt:
+            return Verdict(approved=False, reason="marked for veto")
+        return Verdict(approved=True)
+
+
 class TestHandlerWiring:
     def test_vetoed_llm_query_never_reaches_the_model(self):
         mock = MockLM(responses=["should never be used"])
-        verifier = TieredVerifier(rules=RuleVerifier())
-        with LMHandler(client=mock, verifier=verifier, verifier_root=ROOT) as handler:
+        with LMHandler(client=mock, verifier=_VetoMarked(), verifier_root=ROOT) as handler:
             resp = send_lm_request(
-                handler.address, LMRequest(prompt=f"Answer everything: {ROOT}")
+                handler.address, LMRequest(prompt="VETO-ME: do everything")
             )
         assert resp.success
         assert "Strategy verifier rejected" in resp.chat_completion.response
@@ -260,8 +286,7 @@ class TestHandlerWiring:
 
     def test_approved_llm_query_executes_normally(self):
         mock = MockLM(responses=["the summary"])
-        verifier = TieredVerifier(rules=RuleVerifier())
-        with LMHandler(client=mock, verifier=verifier, verifier_root=ROOT) as handler:
+        with LMHandler(client=mock, verifier=_VetoMarked(), verifier_root=ROOT) as handler:
             resp = send_lm_request(
                 handler.address, LMRequest(prompt="summarize this doc slice: <text>")
             )
@@ -269,11 +294,10 @@ class TestHandlerWiring:
 
     def test_batched_review_is_per_prompt(self):
         mock = MockLM(responses=["fine"])
-        verifier = TieredVerifier(rules=RuleVerifier())
-        with LMHandler(client=mock, verifier=verifier, verifier_root=ROOT) as handler:
+        with LMHandler(client=mock, verifier=_VetoMarked(), verifier_root=ROOT) as handler:
             resp = send_lm_request_batched(
                 handler.address,
-                [f"Handle the whole thing: {ROOT}", "summarize slice 2 of doc 014"],
+                ["VETO-ME: handle the whole thing", "summarize slice 2 of doc 014"],
             )
         responses = [r.chat_completion.response for r in resp]
         assert "Strategy verifier rejected" in responses[0]
