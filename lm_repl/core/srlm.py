@@ -17,6 +17,59 @@ from lm_repl.core.rlm import RLM
 from lm_repl.core.types import RLMChatCompletion
 from lm_repl.logger import RLMLogger
 
+try:  # Optional Prometheus instrumentation; no-op if metrics module unavailable.
+    from lm_repl import metrics as _metrics
+except ImportError:
+    _metrics = None
+
+
+def _emit_route(mode: str) -> None:
+    if _metrics is None:
+        return
+    try:
+        _metrics.srlm_route_total.labels(route="direct" if mode == "direct" else "repl").inc()
+    except Exception:
+        try:
+            _metrics.callback_failures_total.inc()
+        except Exception:
+            pass
+
+
+def _emit_candidates_in_flight(n: int) -> None:
+    if _metrics is None:
+        return
+    try:
+        _metrics.srlm_candidates_in_flight.set(n)
+    except Exception:
+        try:
+            _metrics.callback_failures_total.inc()
+        except Exception:
+            pass
+
+
+def _emit_candidate_outcome(outcome: str) -> None:
+    if _metrics is None:
+        return
+    try:
+        _metrics.srlm_candidates_used_total.labels(outcome=outcome).inc()
+    except Exception:
+        try:
+            _metrics.callback_failures_total.inc()
+        except Exception:
+            pass
+
+
+def _emit_selection_seconds(seconds: float) -> None:
+    if _metrics is None:
+        return
+    try:
+        _metrics.srlm_selection_seconds.observe(seconds)
+    except Exception:
+        try:
+            _metrics.callback_failures_total.inc()
+        except Exception:
+            pass
+
 
 # Appended to the orchestrator system prompt when confidence_elicitation is
 # on. Wording matches the rlm-trainer teacher suffix (generate.py) that the
@@ -109,6 +162,7 @@ class SRLM(RLM):
     ) -> RLMChatCompletion:
         context_str = prompt if isinstance(prompt, str) else str(prompt)
         mode = _choose_mode(len(context_str), self.direct_threshold)
+        _emit_route(mode)
 
         if mode == "direct":
             return self._direct_completion(prompt)
@@ -184,6 +238,7 @@ class SRLM(RLM):
         candidate fails is the last error raised.
         """
         spawned = [self._spawn_candidate_rlm(i) for i in range(self.n_candidates)]
+        _emit_candidates_in_flight(self.n_candidates)
 
         def _run(cand: RLM) -> RLMChatCompletion | Exception:
             try:
@@ -191,19 +246,27 @@ class SRLM(RLM):
             except Exception as exc:  # noqa: BLE001 - candidate isolation
                 return exc
 
-        if self.candidate_parallel > 1:
-            workers = min(self.candidate_parallel, self.n_candidates)
-            with ThreadPoolExecutor(max_workers=workers) as pool:
-                outcomes = list(pool.map(_run, spawned))
-        else:
-            outcomes = [_run(cand) for cand in spawned]
+        try:
+            if self.candidate_parallel > 1:
+                workers = min(self.candidate_parallel, self.n_candidates)
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    outcomes = list(pool.map(_run, spawned))
+            else:
+                outcomes = [_run(cand) for cand in spawned]
+        finally:
+            _emit_candidates_in_flight(0)
+
+        for o in outcomes:
+            _emit_candidate_outcome("success" if isinstance(o, RLMChatCompletion) else "error")
 
         candidates = [o for o in outcomes if isinstance(o, RLMChatCompletion)]
         if not candidates:
             errors = [o for o in outcomes if isinstance(o, Exception)]
             raise errors[-1] if errors else RuntimeError("no candidate produced a completion")
 
+        _sel_t0 = time.perf_counter()
         best = _select_best(candidates, use_confidence=self.confidence_elicitation)
+        _emit_selection_seconds(time.perf_counter() - _sel_t0)
         if best.metadata is None:
             best.metadata = {}
         if isinstance(best.metadata, dict):
