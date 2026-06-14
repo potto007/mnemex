@@ -75,6 +75,9 @@ class RLM:
         subcall_max_tokens: int | None = None,
         subcall_max_timeout: float | None = None,
         subcall_verifier: SubcallVerifier | None = None,
+        answer_verifier: Any = None,
+        max_answer_retries: int = 2,
+        clean_retry_on_error: bool = False,
         subcall_extra_body: dict[str, Any] | None = None,
         root_max_tokens: int | None = None,
         scheduler_max_concurrent: int | None = None,
@@ -193,6 +196,16 @@ class RLM:
         self.subcall_max_tokens = subcall_max_tokens
         self.subcall_max_timeout = subcall_max_timeout
         self.subcall_verifier = subcall_verifier
+        # answer_verifier: callable (answer:str) -> (ok:bool, feedback:str|None).
+        # When set, the final answer is checked at answer["ready"]; a reject (with
+        # retries left) re-prompts IN-LOOP (warm prefix) instead of terminating.
+        self.answer_verifier = answer_verifier
+        self.max_answer_retries = max_answer_retries
+        # clean_retry_on_error: when a REPL iteration errors, DROP the failed turn
+        # (broken code + its echo) from the next prompt and feed only a compact error
+        # note, so the model retries fresh instead of escalating/rebuilding the broken
+        # attempt (the v9 error-escalation spiral). The failed iteration is still logged.
+        self.clean_retry_on_error = clean_retry_on_error
         self.subcall_extra_body = subcall_extra_body
         self.root_max_tokens = root_max_tokens
         # The task this RLM was given, as seen by the verifier's whole-task
@@ -224,6 +237,7 @@ class RLM:
         # Tracking (cumulative across all calls including children)
         self._cumulative_cost: float = 0.0
         self._consecutive_errors: int = 0
+        self._answer_retries: int = 0
         self._last_error: str | None = None
         self._best_partial_answer: str | None = None
         self._completion_start_time: float | None = None  # Set when completion() starts
@@ -392,6 +406,7 @@ class RLM:
 
         # Reset tracking state for this completion
         self._consecutive_errors = 0
+        self._answer_retries = 0
         self._last_error = None
         self._best_partial_answer = None
         # If we're at max depth, the RLM is an LM, so we fallback to the regular LM.
@@ -484,6 +499,25 @@ class RLM:
                     self.verbose.print_iteration(iteration, i + 1)
 
                     if final_answer is not None:
+                        # Answer-level verification (e.g. citation enforcement). On
+                        # reject with retries remaining, record the rejected attempt +
+                        # feedback and CONTINUE the loop instead of terminating, so the
+                        # warm system+history prefix is reused (cheap in-loop revision,
+                        # no full re-lookup). answer_verifier=None disables this entirely.
+                        if (self.answer_verifier is not None
+                                and self._answer_retries < self.max_answer_retries):
+                            ok, feedback = self.answer_verifier(final_answer)
+                            if not ok:
+                                self._answer_retries += 1
+                                new_messages = format_iteration(iteration)
+                                message_history.extend(new_messages)
+                                fb_msg = {"role": "user", "content": feedback
+                                          or "Your final answer did not pass verification; revise it and set answer['ready'] = True again."}
+                                message_history.append(fb_msg)
+                                if self.compaction and hasattr(environment, "append_compaction_entry"):
+                                    environment.append_compaction_entry(new_messages + [fb_msg])
+                                continue
+
                         time_end = time.perf_counter()
                         usage = lm_handler.get_usage_summary()
                         self.verbose.print_final_answer(final_answer)
@@ -505,7 +539,30 @@ class RLM:
                         )
 
                     # Format the iteration for the next prompt.
-                    new_messages = format_iteration(iteration)
+                    iter_errored = any(
+                        cb.result and cb.result.stderr for cb in iteration.code_blocks
+                    )
+                    if iter_errored and self.clean_retry_on_error:
+                        # Anti-spiral: drop the failed turn (broken code + its echo) from
+                        # the prompt context; feed only a compact error note so the model
+                        # retries fresh and cannot escalate by "revising" its broken code.
+                        errs = "\n".join(
+                            cb.result.stderr.strip()
+                            for cb in iteration.code_blocks
+                            if cb.result and cb.result.stderr
+                        )
+                        new_messages = [{
+                            "role": "user",
+                            "content": (
+                                "Your previous REPL code raised an error and has been "
+                                "discarded (it is not shown, to keep the context clean):\n"
+                                f"{errs[:800]}\n\n"
+                                "Do NOT reconstruct or build on that code. Take a fresh, "
+                                "simpler approach."
+                            ),
+                        }]
+                    else:
+                        new_messages = format_iteration(iteration)
 
                     # Update message history with the new messages.
                     message_history.extend(new_messages)
