@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 import uuid
+import warnings
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
@@ -568,7 +569,9 @@ class LocalREPL(NonIsolatedEnv):
         with self._capture_output() as (stdout_buf, stderr_buf), self._temp_cwd():
             try:
                 combined = {**self.globals, **self.locals}
-                exec(code, combined, combined)
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    exec(code, combined, combined)
 
                 # Update locals with new variables
                 for key, value in combined.items():

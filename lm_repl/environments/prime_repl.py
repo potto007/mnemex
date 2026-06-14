@@ -127,6 +127,7 @@ import base64
 import traceback
 import os
 import requests
+import warnings
 
 try:
     import dill
@@ -243,7 +244,9 @@ try:
     sys.stdout = stdout_buf
     sys.stderr = stderr_buf
     combined = {{**_globals, **_locals}}
-    exec(code, combined, combined)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        exec(code, combined, combined)
     for key, value in combined.items():
         if key not in _globals and not key.startswith("_"):
             _locals[key] = value

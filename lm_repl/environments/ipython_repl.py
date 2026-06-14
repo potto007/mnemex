@@ -23,6 +23,7 @@ import io
 import json
 import os
 import re
+import warnings
 import shutil
 import signal
 import socketserver
@@ -1181,7 +1182,9 @@ class IPythonREPL(NonIsolatedEnv):
             try:
                 with redirect_stdout(stdout_buf), redirect_stderr(stderr_buf):
                     try:
-                        result = self._shell.run_cell(code, store_history=False, silent=False)
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore")
+                            result = self._shell.run_cell(code, store_history=False, silent=False)
                     except Exception as e:
                         stderr_buf.write(f"\n{type(e).__name__}: {e}")
                         result = None

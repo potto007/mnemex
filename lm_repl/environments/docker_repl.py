@@ -94,7 +94,7 @@ def _build_exec_script(code: str, proxy_port: int, depth: int = 1) -> str:
 
     return textwrap.dedent(
         f'''
-import sys, io, json, base64, traceback, os, requests
+import sys, io, json, base64, traceback, os, requests, warnings
 try:
     import dill
 except ImportError:
@@ -159,7 +159,9 @@ old_stdout, old_stderr = sys.stdout, sys.stderr
 try:
     sys.stdout, sys.stderr = stdout_buf, stderr_buf
     combined = {{**_globals, **_locals}}
-    exec(code, combined, combined)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        exec(code, combined, combined)
     for k, v in combined.items():
         if k not in _globals and not k.startswith("_"):
             _locals[k] = v
