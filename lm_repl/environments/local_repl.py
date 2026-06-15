@@ -2,6 +2,7 @@ import copy
 import io
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -22,6 +23,9 @@ from lm_repl.environments.base_env import (
     extract_tool_value,
     validate_custom_tools,
 )
+
+# A run of consecutive empty calls '()()...' - the .lower()() decode stutter.
+_DOUBLED_CALL = re.compile(r"\(\)(?:\(\))+")
 
 
 class _AnswerDict(dict):
@@ -164,6 +168,7 @@ class LocalREPL(NonIsolatedEnv):
         compaction: bool = False,
         max_concurrent_subcalls: int = 4,
         max_output_chars: int | None = None,
+        repair_doubled_calls: bool = False,
         **kwargs,
     ):
         super().__init__(
@@ -174,6 +179,11 @@ class LocalREPL(NonIsolatedEnv):
         )
 
         self.max_output_chars = max_output_chars
+        # Collapse a doubled empty-call '()()' -> '()' before exec. The .lower()()
+        # decode stutter (token 825 emitted twice) raises TypeError 'str' object is
+        # not callable; '()()' is never legitimate in this corpus, so repairing it
+        # runs the intended code and avoids the error->spiral. Opt-in (default off).
+        self.repair_doubled_calls = repair_doubled_calls
         self.lm_handler_address = lm_handler_address
         self.subcall_fn = subcall_fn  # Callback for recursive RLM calls (depth > 1 support)
         self.original_cwd = os.getcwd()
@@ -566,6 +576,14 @@ class LocalREPL(NonIsolatedEnv):
         # Clear pending LLM calls from previous execution
         self._pending_llm_calls = []
 
+        # Repair the .lower()() decode stutter before exec: collapse '()()...' -> '()'.
+        # This corruption is never legitimate in the served corpus; repairing it runs
+        # the intended code instead of raising TypeError -> error-threshold spiral.
+        repaired = False
+        if self.repair_doubled_calls and _DOUBLED_CALL.search(code):
+            code = _DOUBLED_CALL.sub("()", code)
+            repaired = True
+
         with self._capture_output() as (stdout_buf, stderr_buf), self._temp_cwd():
             try:
                 combined = {**self.globals, **self.locals}
@@ -586,6 +604,11 @@ class LocalREPL(NonIsolatedEnv):
             except Exception as e:
                 stdout = stdout_buf.getvalue()
                 stderr = stderr_buf.getvalue() + f"\n{type(e).__name__}: {e}"
+
+        if repaired:
+            # Surface the repair in stdout (NOT stderr - it must not count as an error):
+            # informs the model its doubled-() call was auto-collapsed.
+            stdout = "[note: collapsed a doubled '()()' call to '()' before running]\n" + stdout
 
         if self.max_output_chars and len(stdout) > self.max_output_chars:
             stdout = stdout[:self.max_output_chars] + (
