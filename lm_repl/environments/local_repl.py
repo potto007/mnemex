@@ -27,6 +27,12 @@ from lm_repl.environments.base_env import (
 # A run of consecutive empty calls '()()...' - the .lower()() decode stutter.
 _DOUBLED_CALL = re.compile(r"\(\)(?:\(\))+")
 
+# A bare {identifier} placeholder - the missing-f-string signature. When the model
+# builds a variable (e.g. combined_data) then references it as a literal {combined_data}
+# inside a PLAIN (non-f) string passed to llm_query, the data is never substituted and
+# the sub-call sees an empty placeholder. repair_unfilled_placeholders fills it in.
+_PLACEHOLDER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
 
 class _AnswerDict(dict):
     """REPL-visible dict where ``answer["ready"] = True`` signals completion.
@@ -169,6 +175,7 @@ class LocalREPL(NonIsolatedEnv):
         max_concurrent_subcalls: int = 4,
         max_output_chars: int | None = None,
         repair_doubled_calls: bool = False,
+        repair_unfilled_placeholders: bool = False,
         **kwargs,
     ):
         super().__init__(
@@ -184,6 +191,11 @@ class LocalREPL(NonIsolatedEnv):
         # not callable; '()()' is never legitimate in this corpus, so repairing it
         # runs the intended code and avoids the error->spiral. Opt-in (default off).
         self.repair_doubled_calls = repair_doubled_calls
+        # Interpolate a {name} placeholder that names a live, model-created REPL
+        # variable into an llm_query prompt - the missing-f-string bug, where the
+        # model built the data then dropped it by forgetting the f prefix on the
+        # synthesis prompt (sub-call then reports "no information found"). Opt-in.
+        self.repair_unfilled_placeholders = repair_unfilled_placeholders
         self.lm_handler_address = lm_handler_address
         self.subcall_fn = subcall_fn  # Callback for recursive RLM calls (depth > 1 support)
         self.original_cwd = os.getcwd()
@@ -231,6 +243,12 @@ class LocalREPL(NonIsolatedEnv):
         self._pending_llm_calls: list[RLMChatCompletion] = []
         # Captured the first time the model sets ``answer["ready"] = True``.
         self._last_final_answer: str | None = None
+        # The live exec namespace during execute_code, so a sub-call (llm_query)
+        # invoked from inside exec can resolve a {name} placeholder against
+        # variables created in the SAME code block (not yet promoted to locals).
+        self._active_namespace: dict[str, Any] | None = None
+        # Names interpolated by repair_unfilled_placeholders this execution (for the note).
+        self._filled_placeholders: list[str] = []
 
         # Add helper functions
         self.globals["SHOW_VARS"] = self._show_vars
@@ -270,6 +288,36 @@ class LocalREPL(NonIsolatedEnv):
             return "No variables created yet. Use ```repl``` blocks to create variables."
         return f"Available variables: {available}"
 
+    def _fill_placeholders(self, prompt: str) -> str:
+        """Interpolate a ``{name}`` placeholder that names a live, model-created string
+        variable (the missing-f-string signature) into a sub-call prompt.
+
+        Only fills names the model created (present in the live exec namespace, absent
+        from the scaffold globals) that hold a ``str`` value. JSON braces, format
+        examples, undefined names, and scaffold/tool names are left untouched, so this
+        cannot corrupt a prompt that legitimately contains ``{...}``.
+        """
+        if not self.repair_unfilled_placeholders or not isinstance(prompt, str):
+            return prompt
+        ns = self._active_namespace
+        if not ns:
+            return prompt
+
+        def _sub(m: "re.Match[str]") -> str:
+            name = m.group(1)
+            if (
+                name == "answer"
+                or name.startswith("_")
+                or name in self.globals
+                or name not in ns
+                or not isinstance(ns[name], str)
+            ):
+                return m.group(0)
+            self._filled_placeholders.append(name)
+            return ns[name]
+
+        return _PLACEHOLDER.sub(_sub, prompt)
+
     def _llm_query(
         self, prompt: str, model: str | None = None, priority: str | int | None = None
     ) -> str:
@@ -285,6 +333,7 @@ class LocalREPL(NonIsolatedEnv):
         if not self.lm_handler_address:
             return "Error: No LM handler configured"
 
+        prompt = self._fill_placeholders(prompt)
         try:
             request = LMRequest(prompt=prompt, model=model, depth=self.depth, priority=priority)
             response = send_lm_request(self.lm_handler_address, request)
@@ -317,6 +366,7 @@ class LocalREPL(NonIsolatedEnv):
         """
         if not self.lm_handler_address:
             return ["Error: No LM handler configured"] * len(prompts)
+        prompts = [self._fill_placeholders(p) for p in prompts]
         try:
             responses = send_lm_request_batched(
                 self.lm_handler_address, prompts, model=model, depth=self.depth, priority=priority
@@ -575,6 +625,7 @@ class LocalREPL(NonIsolatedEnv):
 
         # Clear pending LLM calls from previous execution
         self._pending_llm_calls = []
+        self._filled_placeholders = []
 
         # Repair the .lower()() decode stutter before exec: collapse '()()...' -> '()'.
         # This corruption is never legitimate in the served corpus; repairing it runs
@@ -587,6 +638,10 @@ class LocalREPL(NonIsolatedEnv):
         with self._capture_output() as (stdout_buf, stderr_buf), self._temp_cwd():
             try:
                 combined = {**self.globals, **self.locals}
+                # A sub-call (llm_query) made from inside exec resolves {name}
+                # placeholders against THIS namespace - it holds variables created
+                # in the same code block that aren't promoted to self.locals yet.
+                self._active_namespace = combined
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
                     exec(code, combined, combined)
@@ -604,6 +659,18 @@ class LocalREPL(NonIsolatedEnv):
             except Exception as e:
                 stdout = stdout_buf.getvalue()
                 stderr = stderr_buf.getvalue() + f"\n{type(e).__name__}: {e}"
+            finally:
+                self._active_namespace = None
+
+        if self._filled_placeholders:
+            # Surface in stdout (NOT stderr - it must not count as an error): the model
+            # referenced {var} literally in a sub-call prompt (missing f-string); the
+            # live variable's value was interpolated so the sub-call saw the real data.
+            names = ", ".join(dict.fromkeys(self._filled_placeholders))
+            stdout = (
+                f"[note: filled REPL variable(s) into an llm_query prompt that used a "
+                f"literal placeholder (missing f-string): {names}]\n" + stdout
+            )
 
         if repaired:
             # Surface the repair in stdout (NOT stderr - it must not count as an error):
