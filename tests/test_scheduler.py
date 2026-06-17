@@ -601,6 +601,24 @@ def _pool_exhaustion_error() -> openai_sdk.InternalServerError:
     )
 
 
+def _memory_slot_error() -> openai_sdk.InternalServerError:
+    """KV-pool exhaustion under concurrent load (rlm-trainer eval finding #3):
+    llama-server's ``decode: failed to find a memory slot`` surfaced as a 500.
+    The p1 drain-and-retry-solo recovery applies just like the context-size 500."""
+    request = httpx.Request("POST", "http://localhost:8080/v1/chat/completions")
+    response = httpx.Response(500, request=request)
+    body = {
+        "error": {
+            "code": 500,
+            "message": "decode: failed to find a memory slot for batch of size 1",
+            "type": "server_error",
+        }
+    }
+    return openai_sdk.InternalServerError(
+        body["error"]["message"], response=response, body=body
+    )
+
+
 def _unrelated_500_error() -> openai_sdk.InternalServerError:
     request = httpx.Request("POST", "http://localhost:8080/v1/chat/completions")
     response = httpx.Response(500, request=request)
@@ -615,6 +633,10 @@ def test_is_context_contention():
 
 def test_is_context_contention_matches_pool_exhaustion_500():
     assert _is_context_contention(_pool_exhaustion_error())
+
+
+def test_is_context_contention_matches_memory_slot_500():
+    assert _is_context_contention(_memory_slot_error())
 
 
 def test_is_context_contention_rejects_unrelated_500():

@@ -62,6 +62,40 @@ def _strip_forcing_echo(response: str) -> str:
     return response
 
 
+# Soft-budget wrap-up (rlm-trainer eval finding #4, 2026-06-16). On uncovered or
+# hard tasks the model over-searches until the HARD deadline (max_timeout) elapses
+# - the run then 504s with no answer, or its reasoning degenerates into a token
+# loop. Once a fraction (soft_timeout_pct) of max_timeout has passed, inject this
+# ONE-TIME message so the model wraps up from what it already has, or refuses,
+# while budget remains. The librarian overrides this with its exact no-coverage
+# sentence so a wrap-up on an uncovered ask becomes a clean, scorable refusal.
+_SOFT_BUDGET_MSG = (
+    "You are running low on time. Stop searching and reading more documents now. "
+    "Using ONLY the information you have already gathered this run, write your "
+    "single best final answer and set answer['ready'] = True this turn. If what "
+    "you have read does not actually answer the question, do not guess - say "
+    "plainly that the answer was not found."
+)
+
+
+def _soft_budget_due(
+    elapsed: float,
+    max_timeout: float | None,
+    soft_pct: float | None,
+    already_fired: bool,
+) -> bool:
+    """True when the soft-budget wrap-up message should be injected now.
+
+    Fires at most once per completion, when more than ``soft_pct`` of
+    ``max_timeout`` has elapsed. No-op unless both ``max_timeout`` and
+    ``soft_pct`` (strictly between 0 and 1) are set."""
+    if already_fired or soft_pct is None or max_timeout is None:
+        return False
+    if not (0.0 < soft_pct < 1.0):
+        return False
+    return elapsed >= soft_pct * max_timeout
+
+
 class RLM:
     """
     Recursive Language Model class that the user instantiates and runs on their tasks.
@@ -102,6 +136,8 @@ class RLM:
         clean_retry_on_error: bool = False,
         subcall_extra_body: dict[str, Any] | None = None,
         root_max_tokens: int | None = None,
+        soft_timeout_pct: float | None = None,
+        soft_timeout_message: str | None = None,
         scheduler_max_concurrent: int | None = None,
         scheduler_aging_interval: float | None = 30.0,
         scheduler_coordination_dir: str | Path | None = None,
@@ -172,6 +208,17 @@ class RLM:
                 bounds sub-calls. Set generously (real answers run a few
                 thousand tokens). Inherited by recursion children. None
                 (default) leaves root calls uncapped.
+            soft_timeout_pct: If set (0 < pct < 1) together with max_timeout,
+                inject a one-time wrap-up message once this fraction of
+                max_timeout has elapsed, so the model answers from what it has
+                gathered (or refuses) before the hard deadline 504s or its
+                reasoning degenerates. Converts the slow tail into clean
+                completions/refusals and caps tail latency. None (default) =
+                off; no behavior change.
+            soft_timeout_message: Override text for the wrap-up message
+                (default _SOFT_BUDGET_MSG). Use a domain-specific wording, e.g.
+                a librarian's exact no-coverage refusal sentence so a wrap-up on
+                an uncovered question scores as a clean refusal.
             scheduler_max_concurrent: If set, create a priority RequestScheduler shared by all
                 backend clients, capping in-flight requests and enabling context-contention
                 retries at exclusive (p1) priority. Match this to the inference server's slot
@@ -230,6 +277,12 @@ class RLM:
         self.clean_retry_on_error = clean_retry_on_error
         self.subcall_extra_body = subcall_extra_body
         self.root_max_tokens = root_max_tokens
+        # soft_timeout_pct: inject a one-time wrap-up message once this fraction of
+        # max_timeout has elapsed (see _SOFT_BUDGET_MSG / _soft_budget_due). Default
+        # None = off (no behavior change). soft_timeout_message overrides the text.
+        self.soft_timeout_pct = soft_timeout_pct
+        self.soft_timeout_message = soft_timeout_message or _SOFT_BUDGET_MSG
+        self._soft_budget_fired = False
         # The task this RLM was given, as seen by the verifier's whole-task
         # rule. Set per completion(); children record their delegated prompt.
         self._verifier_root: str | None = None
@@ -431,6 +484,7 @@ class RLM:
         self._answer_retries = 0
         self._last_error = None
         self._best_partial_answer = None
+        self._soft_budget_fired = False
         # If we're at max depth, the RLM is an LM, so we fallback to the regular LM.
         if self.depth >= self.max_depth:
             return self._fallback_answer(prompt)
@@ -446,6 +500,14 @@ class RLM:
                 for i in range(self.max_iterations):
                     # Check timeout before each iteration
                     self._check_timeout(i, time_start)
+
+                    # Soft budget: once a fraction of max_timeout has elapsed,
+                    # inject a one-time wrap-up message (answer-or-refuse now)
+                    # so the slow tail becomes a clean completion/refusal rather
+                    # than a hard-deadline 504 or a degenerate token loop.
+                    self._maybe_inject_soft_budget(
+                        message_history, time.perf_counter() - time_start
+                    )
 
                     # Compaction: check if context needs summarization
                     if self.compaction and hasattr(environment, "append_compaction_entry"):
@@ -633,6 +695,28 @@ class RLM:
                 execution_time=time_end - time_start,
                 metadata=self.logger.get_trajectory() if self.logger else None,
             )
+
+    def _maybe_inject_soft_budget(
+        self, message_history: list[dict[str, Any]], elapsed: float
+    ) -> bool:
+        """Inject the one-time soft-budget wrap-up message if it is due.
+
+        Appends ``soft_timeout_message`` as a user turn so the next root call
+        wraps up (answer-or-refuse) instead of reading more. Fires at most once
+        per completion. Returns True iff it injected this call. No-op unless
+        soft_timeout_pct + max_timeout are configured (default off)."""
+        if not _soft_budget_due(
+            elapsed, self.max_timeout, self.soft_timeout_pct, self._soft_budget_fired
+        ):
+            return False
+        message_history.append({"role": "user", "content": self.soft_timeout_message})
+        self._soft_budget_fired = True
+        self.verbose.print_limit_exceeded(
+            "soft-budget",
+            f"{elapsed:.1f}s of {self.max_timeout:.1f}s "
+            f"(>{self.soft_timeout_pct:.0%}) - forcing wrap-up",
+        )
+        return True
 
     def _check_timeout(self, iteration: int, time_start: float) -> None:
         """Raise TimeoutExceededError if the timeout has been exceeded."""
