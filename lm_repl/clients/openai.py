@@ -46,6 +46,14 @@ def _is_context_contention(e: openai.APIStatusError) -> bool:
     themselves, so the p1 retry (drain, then run solo) is exactly the right recovery.
     Example body:
     ``{"error":{"code":500,"message":"Context size has been exceeded.","type":"server_error"}}``
+
+    500 ``failed to find a memory slot`` - the KV-pool exhaustion seen in the
+    rlm-trainer 2026-06-16 eval (finding #3): under concurrent multi-doc asks the
+    unified KV pool runs out of slots (``decode: failed to find a memory slot``).
+    On builds that surface this as a 500 (rather than a hard ggml_abort that kills
+    the process), the same recovery applies - drain the pool and retry the request
+    solo at p1, where the slots it needs are free. A genuine process crash instead
+    yields a connection error that the p1 retry cannot help and that propagates.
     """
     body = getattr(e, "body", None)
     if isinstance(body, dict):
@@ -53,13 +61,15 @@ def _is_context_contention(e: openai.APIStatusError) -> bool:
         if isinstance(err, dict):
             if err.get("type") == "exceed_context_size_error":
                 return True
-            if "context size has been exceeded" in str(err.get("message", "")).lower():
+            msg = str(err.get("message", "")).lower()
+            if "context size has been exceeded" in msg or "find a memory slot" in msg:
                 return True
-    text = str(e)
+    text = str(e).lower()
     return (
         "exceed_context_size_error" in text
         or "exceeds the available context size" in text
-        or "context size has been exceeded" in text.lower()
+        or "context size has been exceeded" in text
+        or "find a memory slot" in text
     )
 
 

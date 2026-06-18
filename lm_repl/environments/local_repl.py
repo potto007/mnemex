@@ -155,6 +155,31 @@ _SAFE_BUILTINS = {
 }
 
 
+# Retrieval circuit-breaker (rlm-trainer eval finding, issue #4). The orchestrator
+# loop is otherwise unbounded - one observed ask issued 579 llm_query sub-calls
+# before the time budget stopped it. Once a completion has spent its sub-call
+# budget, further llm_query / llm_query_batched calls short-circuit with THIS
+# instruction instead of hitting the server, so the model must answer from what it
+# has already gathered. Default off (None); the librarian supplies the value.
+_SUBCALL_BUDGET_MSG = (
+    "Error: retrieval budget exhausted - you have already made the maximum number "
+    "of document/sub-query calls for this question. STOP searching. Using ONLY the "
+    "information you have already gathered, write your single best final answer and "
+    "set answer['ready'] = True this turn, or give your no-coverage answer if you "
+    "found nothing relevant. Do NOT call llm_query / llm_query_batched again."
+)
+
+
+def _subcall_budget_remaining(count: int, max_subcalls: int | None) -> int | None:
+    """Sub-calls still allowed this completion. None = unlimited (disabled).
+
+    ``max_subcalls`` None or <= 0 disables the cap (returns None). Otherwise
+    returns ``max(0, max_subcalls - count)`` - never negative."""
+    if max_subcalls is None or max_subcalls <= 0:
+        return None
+    return max(0, max_subcalls - count)
+
+
 class LocalREPL(NonIsolatedEnv):
     """
     Local REPL environment with persistent Python namespace.
@@ -176,6 +201,7 @@ class LocalREPL(NonIsolatedEnv):
         max_output_chars: int | None = None,
         repair_doubled_calls: bool = False,
         repair_unfilled_placeholders: bool = False,
+        max_subcalls: int | None = None,
         **kwargs,
     ):
         super().__init__(
@@ -184,6 +210,14 @@ class LocalREPL(NonIsolatedEnv):
             max_concurrent_subcalls=max_concurrent_subcalls,
             **kwargs,
         )
+
+        # Retrieval circuit-breaker: hard cap on llm_query / llm_query_batched
+        # sub-calls per completion. None = off. Once spent, further reads
+        # short-circuit with _SUBCALL_BUDGET_MSG so the model must wrap up. The
+        # counter is per-instance and a fresh environment is spawned per
+        # completion (non-persistent), so it starts at 0 for each ask.
+        self.max_subcalls = max_subcalls
+        self._subcall_count = 0
 
         self.max_output_chars = max_output_chars
         # Collapse a doubled empty-call '()()' -> '()' before exec. The .lower()()
@@ -333,8 +367,13 @@ class LocalREPL(NonIsolatedEnv):
         if not self.lm_handler_address:
             return "Error: No LM handler configured"
 
+        # Circuit-breaker: refuse further reads once the per-ask budget is spent.
+        if _subcall_budget_remaining(self._subcall_count, self.max_subcalls) == 0:
+            return _SUBCALL_BUDGET_MSG
+
         prompt = self._fill_placeholders(prompt)
         try:
+            self._subcall_count += 1
             request = LMRequest(prompt=prompt, model=model, depth=self.depth, priority=priority)
             response = send_lm_request(self.lm_handler_address, request)
 
@@ -367,19 +406,29 @@ class LocalREPL(NonIsolatedEnv):
         if not self.lm_handler_address:
             return ["Error: No LM handler configured"] * len(prompts)
         prompts = [self._fill_placeholders(p) for p in prompts]
+
+        # Circuit-breaker: dispatch only as many prompts as the per-ask budget
+        # allows; the overflow short-circuits with the wrap-up instruction so the
+        # batch cannot blow past the cap in one cell. None = unlimited.
+        remaining = _subcall_budget_remaining(self._subcall_count, self.max_subcalls)
+        allowed = prompts if remaining is None else prompts[:remaining]
+        n_blocked = len(prompts) - len(allowed)
+
         try:
-            responses = send_lm_request_batched(
-                self.lm_handler_address, prompts, model=model, depth=self.depth, priority=priority
-            )
+            results: list[str] = []
+            if allowed:
+                self._subcall_count += len(allowed)
+                responses = send_lm_request_batched(
+                    self.lm_handler_address, allowed, model=model, depth=self.depth, priority=priority
+                )
+                for response in responses:
+                    if not response.success:
+                        results.append(f"Error: {response.error}")
+                    else:
+                        self._pending_llm_calls.append(response.chat_completion)
+                        results.append(response.chat_completion.response)
 
-            results = []
-            for response in responses:
-                if not response.success:
-                    results.append(f"Error: {response.error}")
-                else:
-                    self._pending_llm_calls.append(response.chat_completion)
-                    results.append(response.chat_completion.response)
-
+            results.extend([_SUBCALL_BUDGET_MSG] * n_blocked)
             return results
         except Exception as e:
             return [f"Error: LM query failed - {e}"] * len(prompts)
