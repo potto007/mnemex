@@ -362,6 +362,15 @@ class LMHandler:
             if hasattr(c, "set_deadline"):
                 c.set_deadline(max_timeout)
 
+    def repeat_guard_aborts(self) -> int:
+        """Total repeat-guard aborts across every client in the current run.
+
+        The orchestrator escalates to a forced wrap-up once this crosses
+        ``repeat_guard_abort_limit``. ``_all_clients`` is already id-deduped so the
+        default client (also registered under its model name) is not double-counted.
+        Clients without the attribute (non-OpenAI backends) contribute 0."""
+        return sum(getattr(c, "repeat_guard_aborts", 0) for c in self._all_clients())
+
     def cancel_inflight(self) -> None:
         """Abort in-flight and queued LM calls on every cancellable client.
 

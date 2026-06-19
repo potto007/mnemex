@@ -189,6 +189,10 @@ class OpenAIClient(BaseLM):
         self._repeat_guard_threshold = (
             repeat_guard_threshold if (repeat_guard_threshold or 0) > 0 else None
         )
+        # Count of repeat-guard aborts in the CURRENT run (reset by set_deadline when a
+        # run is armed). The orchestrator reads the per-run total via the handler and
+        # escalates to a forced wrap-up once it crosses repeat_guard_abort_limit.
+        self.repeat_guard_aborts = 0
         # Cooperative cancellation: the owning run (RLM) sets this to abort every
         # in-flight and queued call of this client; checked between stream chunks.
         self.cancel_event = threading.Event()
@@ -243,6 +247,8 @@ class OpenAIClient(BaseLM):
         if max_timeout is None:
             self._deadline = self._run_started = self._max_timeout = None
             return
+        # Arming a fresh run: reset the per-run repeat-guard abort count.
+        self.repeat_guard_aborts = 0
         self._run_started = time.monotonic()
         self._deadline = self._run_started + max_timeout
         self._max_timeout = max_timeout
@@ -381,6 +387,7 @@ class OpenAIClient(BaseLM):
                             log.info(
                                 "repeat-guard: aborting looping reasoning at %d chars", total
                             )
+                            self.repeat_guard_aborts += 1
                             break
         finally:
             # On abort this closes the HTTP stream; llama-server notices the

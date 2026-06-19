@@ -214,6 +214,7 @@ def test_srlm_candidate_inherits_all_caller_guards():
         max_answer_retries=7,
         soft_timeout_pct=0.6,
         soft_timeout_message="wrap it up",
+        repeat_guard_abort_limit=5,
         scheduler_max_concurrent=4,
         scheduler_aging_interval=15.0,
         scheduler_coordination_dir="/tmp/coord",
@@ -230,6 +231,7 @@ def test_srlm_candidate_inherits_all_caller_guards():
     assert candidate.max_answer_retries == 7
     assert candidate.soft_timeout_pct == 0.6
     assert candidate.soft_timeout_message == "wrap it up"
+    assert candidate.repeat_guard_abort_limit == 5
     assert candidate.scheduler_max_concurrent == 4
     assert candidate.scheduler_aging_interval == 15.0
     assert candidate.scheduler_coordination_dir == "/tmp/coord"
@@ -524,6 +526,31 @@ def test_repeat_guard_disabled_by_default_consumes_whole_stream():
 
     client.completion("hi")
     assert len(yielded) == len(chunks)                  # ran to completion, no early stop
+
+
+def test_repeat_guard_abort_counter_increments_and_resets():
+    # the orchestrator escalation (test_guard_escalation) reads this per-run count
+    client = _patched_openai_client(stream=True, repeat_guard_threshold=0.35)
+    assert client.repeat_guard_aborts == 0
+    stream = _FakeStream(_loop_reasoning_chunks(120))
+    client.client = MagicMock()
+    client.client.chat.completions.create.return_value = stream
+
+    client.completion("hi")
+    assert client.repeat_guard_aborts == 1
+    # arming a fresh run (set_run_deadline -> set_deadline) resets the per-ask count
+    client.set_deadline(100.0)
+    assert client.repeat_guard_aborts == 0
+
+
+def test_handler_aggregates_repeat_guard_aborts_deduped():
+    a = _patched_openai_client()
+    b = _patched_openai_client()
+    a.repeat_guard_aborts = 2
+    b.repeat_guard_aborts = 3
+    handler = LMHandler(client=a, other_backend_client=b)
+    # a is both default_client and registered under its model_name; must not double-count
+    assert handler.repeat_guard_aborts() == 5
 
 
 def test_repeat_guard_does_not_fire_once_content_is_flowing():
