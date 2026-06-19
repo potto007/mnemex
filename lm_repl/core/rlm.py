@@ -96,6 +96,20 @@ def _soft_budget_due(
     return elapsed >= soft_pct * max_timeout
 
 
+def _guard_escalation_due(aborts: int, limit: int | None, already_fired: bool) -> bool:
+    """True when the repeat-guard escalation wrap-up should be injected now.
+
+    Fires at most once per completion, once the cumulative repeat-guard abort count
+    for the run reaches ``limit``. No-op unless ``limit`` is a positive int. This is
+    the count-based sibling of ``_soft_budget_due`` (which is time-based): a single
+    looping completion is aborted cheaply by the client guard, but an ask that keeps
+    re-entering the loop is forced to wrap up (answer-or-refuse) after ``limit``
+    aborts instead of producing a fast-but-empty degeneration."""
+    if already_fired or limit is None or limit <= 0:
+        return False
+    return aborts >= limit
+
+
 class RLM:
     """
     Recursive Language Model class that the user instantiates and runs on their tasks.
@@ -139,6 +153,7 @@ class RLM:
         max_decode_tokens: int | None = DEFAULT_MAX_DECODE_TOKENS,
         soft_timeout_pct: float | None = None,
         soft_timeout_message: str | None = None,
+        repeat_guard_abort_limit: int | None = None,
         scheduler_max_concurrent: int | None = None,
         scheduler_aging_interval: float | None = 30.0,
         scheduler_coordination_dir: str | Path | None = None,
@@ -292,6 +307,11 @@ class RLM:
         self.soft_timeout_pct = soft_timeout_pct
         self.soft_timeout_message = soft_timeout_message or _SOFT_BUDGET_MSG
         self._soft_budget_fired = False
+        # repeat_guard_abort_limit: after this many repeat-guard aborts in one
+        # completion, inject the same wrap-up message (count-based sibling of the
+        # time-based soft budget; see _guard_escalation_due). Default None = off.
+        self.repeat_guard_abort_limit = repeat_guard_abort_limit
+        self._guard_escalation_fired = False
         # The task this RLM was given, as seen by the verifier's whole-task
         # rule. Set per completion(); children record their delegated prompt.
         self._verifier_root: str | None = None
@@ -495,6 +515,7 @@ class RLM:
         self._last_error = None
         self._best_partial_answer = None
         self._soft_budget_fired = False
+        self._guard_escalation_fired = False
         # If we're at max depth, the RLM is an LM, so we fallback to the regular LM.
         if self.depth >= self.max_depth:
             return self._fallback_answer(prompt)
@@ -518,6 +539,16 @@ class RLM:
                     self._maybe_inject_soft_budget(
                         message_history, time.perf_counter() - time_start
                     )
+
+                    # Repeat-guard escalation: if the client guard has aborted a
+                    # looping completion enough times this ask, force the same
+                    # wrap-up so a persistent looper becomes a clean answer/refusal
+                    # rather than a fast-but-empty degeneration. Only poll the count
+                    # when the feature is on (keeps it off the default-config path).
+                    if self.repeat_guard_abort_limit:
+                        self._maybe_inject_guard_escalation(
+                            message_history, lm_handler.repeat_guard_aborts()
+                        )
 
                     # Compaction: check if context needs summarization
                     if self.compaction and hasattr(environment, "append_compaction_entry"):
@@ -725,6 +756,26 @@ class RLM:
             "soft-budget",
             f"{elapsed:.1f}s of {self.max_timeout:.1f}s "
             f"(>{self.soft_timeout_pct:.0%}) - forcing wrap-up",
+        )
+        return True
+
+    def _maybe_inject_guard_escalation(
+        self, message_history: list[dict[str, Any]], aborts: int
+    ) -> bool:
+        """Inject the wrap-up message once the per-ask repeat-guard abort count
+        reaches ``repeat_guard_abort_limit``. Reuses ``soft_timeout_message`` (the
+        answer-or-refuse policy text). Fires at most once per completion; no-op
+        unless ``repeat_guard_abort_limit`` is configured. Returns True iff injected."""
+        if not _guard_escalation_due(
+            aborts, self.repeat_guard_abort_limit, self._guard_escalation_fired
+        ):
+            return False
+        message_history.append({"role": "user", "content": self.soft_timeout_message})
+        self._guard_escalation_fired = True
+        self.verbose.print_limit_exceeded(
+            "repeat-guard-escalation",
+            f"{aborts} reasoning-loop aborts (>={self.repeat_guard_abort_limit}) "
+            f"- forcing wrap-up",
         )
         return True
 

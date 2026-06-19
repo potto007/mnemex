@@ -232,6 +232,7 @@ class SRLM(RLM):
             max_answer_retries=self.max_answer_retries,
             soft_timeout_pct=self.soft_timeout_pct,
             soft_timeout_message=self.soft_timeout_message,
+            repeat_guard_abort_limit=self.repeat_guard_abort_limit,
             scheduler_max_concurrent=self.scheduler_max_concurrent,
             scheduler_aging_interval=self.scheduler_aging_interval,
             scheduler_coordination_dir=self.scheduler_coordination_dir,
