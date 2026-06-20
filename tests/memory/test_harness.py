@@ -119,6 +119,40 @@ def test_collect_skips_entry_whose_id_already_exists(tmp_path):
     assert [e["id"] for e in bank.load()] == ["dup"]
 
 
+class FakeTagger:
+    def __init__(self, tags):
+        self.tags = tags
+
+    def tag(self, query):
+        return dict(self.tags)
+
+
+def test_tagger_gates_retrieval_by_conflicting_tag(tmp_path):
+    bank = Bank(tmp_path / "mem")
+    e = _entry("a", [1.0, 0.0])
+    e["tags"] = {"kind": "numeric"}
+    bank.append(e)
+    solver = FakeSolver()
+    harness = MemoryHarness(
+        solver, bank, FakeBackend({"Q": [1.0, 0.0]}), min_cosine=0.5,
+        tagger=FakeTagger({"kind": "entity"}),
+    )
+    harness.answer(context="ctx", question="Q")
+    _, root_prompt = solver.calls[0]
+    assert root_prompt == "Q"  # conflicting tag gated the entry out -> no memory
+
+
+def test_collect_tags_entry_using_tagger(tmp_path):
+    bank = Bank(tmp_path / "mem")
+    harness = MemoryHarness(
+        FakeSolver(), bank, FakeBackend(),
+        tagger=FakeTagger({"kind": "numeric"}),
+        distiller=lambda q, c, r: _entry("learned", [0.1, 0.2]),
+    )
+    harness.answer(context="ctx", question="q")
+    assert bank.load()[0]["tags"] == {"kind": "numeric"}
+
+
 def test_collect_failure_never_breaks_answer(tmp_path):
     bank = Bank(tmp_path / "mem")
 

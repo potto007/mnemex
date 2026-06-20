@@ -27,6 +27,7 @@ from lm_repl.memory.retrieve import (
     DEFAULT_MIN_COSINE,
     retrieve,
 )
+from lm_repl.memory.tagger import NullTagger, Tagger
 
 # (question, context, solver_result) -> a new entry dict, or None to write nothing.
 Distiller = Callable[[str, str, Any], dict | None]
@@ -49,6 +50,7 @@ class MemoryHarness:
         k_max: int = DEFAULT_K_MAX,
         min_cosine: float = DEFAULT_MIN_COSINE,
         distiller: Distiller | None = None,
+        tagger: Tagger | None = None,
     ) -> None:
         self.solver = solver
         self.bank = bank
@@ -56,10 +58,15 @@ class MemoryHarness:
         self.k_max = k_max
         self.min_cosine = min_cosine
         self.distiller = distiller
+        self.tagger = tagger or NullTagger()
 
     def answer(self, context: str, question: str) -> Any:
         """Solve ``question`` over ``context``, using and growing memory."""
-        entries, scores = self._retrieve(question)
+        try:
+            query_tags = self.tagger.tag(question)
+        except Exception:
+            query_tags = {}
+        entries, scores = self._retrieve(question, query_tags)
 
         if entries:
             block = render_memory_block(entries)
@@ -76,21 +83,22 @@ class MemoryHarness:
 
         result = self.solver.completion(context, root_prompt)
 
-        self._collect(question, context, result)
+        self._collect(question, context, result, query_tags)
         return result
 
-    def _retrieve(self, question: str) -> tuple[list[dict], list[float]]:
+    def _retrieve(self, question: str, query_tags: dict) -> tuple[list[dict], list[float]]:
         """Retrieve experiences, degrading to empty on any failure."""
         try:
             res = retrieve(
                 question, self.bank, self.backend,
                 k_max=self.k_max, min_cosine=self.min_cosine,
+                query_tags=query_tags,
             )
             return res.entries, res.scores
         except Exception:
             return [], []
 
-    def _collect(self, question: str, context: str, result: Any) -> None:
+    def _collect(self, question: str, context: str, result: Any, query_tags: dict) -> None:
         """Best-effort distillation of a new experience; never raises."""
         if self.distiller is None:
             return
@@ -98,6 +106,8 @@ class MemoryHarness:
             entry = self.distiller(question, context, result)
             if not entry:
                 return
+            if query_tags and not entry.get("tags"):
+                entry["tags"] = dict(query_tags)
             eid = entry.get("id")
             if eid is not None and any(e.get("id") == eid for e in self.bank.load()):
                 return  # one experience per id; do not append a duplicate

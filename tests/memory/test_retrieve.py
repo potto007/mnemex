@@ -70,6 +70,44 @@ def test_dedups_by_id(tmp_path):
     assert [e["id"] for e in result.entries] == ["dup"]
 
 
+def _tagged_entry(eid, embedding, tags):
+    e = _entry(eid, embedding)
+    e["tags"] = tags
+    return e
+
+
+def test_query_tags_none_does_not_filter(tmp_path):
+    bank = Bank(tmp_path / "mem")
+    bank.append(_tagged_entry("a", [1.0, 0.0], {"kind": "numeric"}))
+    backend = FakeBackend({"q": [1.0, 0.0]})
+    result = retrieve("q", bank, backend, min_cosine=0.5, query_tags=None)
+    assert [e["id"] for e in result.entries] == ["a"]
+
+
+def test_conflicting_tag_excludes_entry(tmp_path):
+    bank = Bank(tmp_path / "mem")
+    bank.append(_tagged_entry("numeric", [1.0, 0.0], {"kind": "numeric"}))
+    backend = FakeBackend({"q": [1.0, 0.0]})
+    result = retrieve("q", bank, backend, min_cosine=0.5, query_tags={"kind": "entity"})
+    assert result.mode == "no-memory"
+
+
+def test_missing_tag_key_is_permissive(tmp_path):
+    bank = Bank(tmp_path / "mem")
+    bank.append(_entry("untagged", [1.0, 0.0]))  # no tags at all
+    backend = FakeBackend({"q": [1.0, 0.0]})
+    result = retrieve("q", bank, backend, min_cosine=0.5, query_tags={"kind": "numeric"})
+    assert [e["id"] for e in result.entries] == ["untagged"]
+
+
+def test_matching_tag_is_kept(tmp_path):
+    bank = Bank(tmp_path / "mem")
+    bank.append(_tagged_entry("a", [1.0, 0.0], {"kind": "numeric"}))
+    backend = FakeBackend({"q": [1.0, 0.0]})
+    result = retrieve("q", bank, backend, min_cosine=0.5, query_tags={"kind": "numeric"})
+    assert [e["id"] for e in result.entries] == ["a"]
+
+
 def test_scores_align_with_entries(tmp_path):
     bank = Bank(tmp_path / "mem")
     bank.append(_entry("aligned", [1.0, 0.0]))

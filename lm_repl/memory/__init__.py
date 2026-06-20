@@ -3,25 +3,49 @@
 A domain-agnostic port of FinAcumen's FM subsystem. Wraps a context-offloading
 solver (an :class:`~lm_repl.SRLM`) so it accumulates and reuses verified,
 polarity-tagged experience across tasks: retrieve -> inject -> solve -> collect.
+
+Quick start::
+
+    from lm_repl import SRLM
+    from lm_repl.memory import build_memory_harness_from_config
+
+    srlm = SRLM(backend="openai", backend_kwargs={...})
+    harness = build_memory_harness_from_config(
+        srlm, "memory_bank",
+        base_url="http://localhost:8080/v1",
+        embed_model="nv-embed-v2", reflect_model="my-judge",
+    )
+    result = harness.answer(context=long_context, question="...")
 """
 from lm_repl.memory.bank import Bank
 from lm_repl.memory.distill import TraceDistiller
 from lm_repl.memory.embed import EmbeddingBackend, cosine
 from lm_repl.memory.embed_openai import OpenAIEmbeddingBackend
+from lm_repl.memory.factory import (
+    build_memory_harness,
+    build_memory_harness_from_config,
+)
 from lm_repl.memory.harness import Distiller, MemoryHarness, Solver
 from lm_repl.memory.inject import render_memory_block
 from lm_repl.memory.pruning_rules import is_anti_give_up
+from lm_repl.memory.reflect import OpenAIReflectFn
 from lm_repl.memory.retrieve import RetrievalResult, retrieve
+from lm_repl.memory.tagger import NullTagger, Tagger
 
 __all__ = [
     "Bank",
     "EmbeddingBackend",
     "OpenAIEmbeddingBackend",
+    "OpenAIReflectFn",
     "cosine",
     "MemoryHarness",
     "Distiller",
     "Solver",
+    "Tagger",
+    "NullTagger",
     "TraceDistiller",
+    "build_memory_harness",
+    "build_memory_harness_from_config",
     "is_anti_give_up",
     "render_memory_block",
     "RetrievalResult",
