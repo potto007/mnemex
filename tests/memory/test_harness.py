@@ -1,0 +1,120 @@
+"""Tests for the mnemex MemoryHarness (retrieve -> inject -> solve -> collect)."""
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+from lm_repl.memory.bank import Bank
+from lm_repl.memory.harness import MemoryHarness
+
+
+class FakeSolver:
+    """Records the (prompt, root_prompt) it was called with."""
+
+    def __init__(self, answer="42"):
+        self.answer = answer
+        self.calls: list[tuple] = []
+
+    def completion(self, prompt, root_prompt=None):
+        self.calls.append((prompt, root_prompt))
+        return SimpleNamespace(final_answer=self.answer)
+
+
+class FakeBackend:
+    def __init__(self, table=None, raises=False):
+        self.table = table or {}
+        self.raises = raises
+
+    def embed(self, text):
+        if self.raises:
+            raise RuntimeError("embedding service down")
+        return self.table.get(text, [0.0, 0.0])
+
+
+def _entry(eid, embedding):
+    return {
+        "id": eid,
+        "polarity": "positive",
+        "key_insight": f"insight {eid}",
+        "embedding": embedding,
+        "stats": {"use_count": 0, "hit_count": 0},
+    }
+
+
+def test_no_memory_path_keeps_root_prompt_byte_identical(tmp_path):
+    bank = Bank(tmp_path / "mem")  # empty
+    solver = FakeSolver()
+    harness = MemoryHarness(solver, bank, FakeBackend())
+    harness.answer(context="ctx", question="What is 6*7?")
+    prompt, root_prompt = solver.calls[0]
+    assert prompt == "ctx"
+    assert root_prompt == "What is 6*7?"  # no memory tokens leaked in
+
+
+def test_with_memory_injects_block_into_root_prompt(tmp_path):
+    bank = Bank(tmp_path / "mem")
+    bank.append(_entry("a", [1.0, 0.0]))
+    solver = FakeSolver()
+    harness = MemoryHarness(solver, bank, FakeBackend({"Q": [1.0, 0.0]}), min_cosine=0.5)
+    harness.answer(context="ctx", question="Q")
+    _, root_prompt = solver.calls[0]
+    assert "<Memory_Block>" in root_prompt
+    assert "insight a" in root_prompt
+    assert root_prompt.rstrip().endswith("Q")
+
+
+def test_returns_solver_result(tmp_path):
+    bank = Bank(tmp_path / "mem")
+    solver = FakeSolver(answer="hello")
+    harness = MemoryHarness(solver, bank, FakeBackend())
+    result = harness.answer(context="ctx", question="q")
+    assert result.final_answer == "hello"
+
+
+def test_retrieval_bumps_use_count(tmp_path):
+    bank = Bank(tmp_path / "mem")
+    bank.append(_entry("a", [1.0, 0.0]))
+    harness = MemoryHarness(FakeSolver(), bank, FakeBackend({"Q": [1.0, 0.0]}), min_cosine=0.5)
+    harness.answer(context="ctx", question="Q")
+    assert bank.load()[0]["stats"]["use_count"] == 1
+
+
+def test_embedding_failure_degrades_to_no_memory(tmp_path):
+    bank = Bank(tmp_path / "mem")
+    bank.append(_entry("a", [1.0, 0.0]))
+    solver = FakeSolver()
+    harness = MemoryHarness(solver, bank, FakeBackend(raises=True), min_cosine=0.5)
+    # Must not raise; solve still happens with a clean root_prompt.
+    harness.answer(context="ctx", question="Q")
+    _, root_prompt = solver.calls[0]
+    assert root_prompt == "Q"
+
+
+def test_collect_appends_distilled_entry(tmp_path):
+    bank = Bank(tmp_path / "mem")  # empty
+
+    def distiller(question, context, result):
+        return _entry("learned", [0.5, 0.5])
+
+    harness = MemoryHarness(FakeSolver(), bank, FakeBackend(), distiller=distiller)
+    harness.answer(context="ctx", question="q")
+    assert [e["id"] for e in bank.load()] == ["learned"]
+
+
+def test_collect_none_writes_nothing(tmp_path):
+    bank = Bank(tmp_path / "mem")
+    harness = MemoryHarness(FakeSolver(), bank, FakeBackend(),
+                            distiller=lambda q, c, r: None)
+    harness.answer(context="ctx", question="q")
+    assert bank.load() == []
+
+
+def test_collect_failure_never_breaks_answer(tmp_path):
+    bank = Bank(tmp_path / "mem")
+
+    def boom(question, context, result):
+        raise RuntimeError("distiller blew up")
+
+    solver = FakeSolver(answer="ok")
+    harness = MemoryHarness(solver, bank, FakeBackend(), distiller=boom)
+    result = harness.answer(context="ctx", question="q")
+    assert result.final_answer == "ok"
