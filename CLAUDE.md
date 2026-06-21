@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-LM REPL context is offloaded into a variable inside a REPL environment, and the model writes programs that slice search, and recursively query that context instead of attending over it directly. 
+mnemex (formerly lm-repl; import path `mnemex`, repo `potto007/mnemex`, on-disk dir still `/home/potto/src/lm-repl`) is a language-model harness that learns. Context is offloaded into a variable inside a REPL environment, and the model writes programs that slice, search, and recursively query that context instead of attending over it directly; an experience-memory layer (`mnemex/memory/`) distills and retrieves past solves so each run improves on the last. See ADR-0006 for the rename and ADR-0005 for the memory layer.
 
 This venv uses `uv` (there is NO `pip` binary in `.venv/bin`; use `~/.local/bin/uv`).
 
