@@ -162,9 +162,9 @@ def _report(after1: list[dict], after2: list[dict]) -> int:
         return 1
 
     print("SMOKE TEST PASSED:")
-    print(f"  - 1 bank entry with key_insight + embedding")
-    print(f"  - id dedup held (still 1 entry after call 2)")
-    print(f"  - use_count bumped to 1 (retrieval hit on call 2)")
+    print("  - 1 bank entry with key_insight + embedding")
+    print("  - id dedup held (still 1 entry after call 2)")
+    print("  - use_count bumped to 1 (retrieval hit on call 2)")
     print(f"  - key_insight: {after2[0].get('key_insight')!r}")
     return 0
 

@@ -161,9 +161,9 @@ def _report(entries: list[dict]) -> int:
         return 1
 
     print("TIER-2 SMOKE TEST PASSED (real semantic retrieval via bge-m3):")
-    print(f"  - 2 entries (Q1 learned, paraphrase learned as distinct id)")
-    print(f"  - Q1 embedding is 1024-dim (bge-m3)")
-    print(f"  - Q1.use_count == 2: matched by an EXACT re-ask AND a paraphrase")
+    print("  - 2 entries (Q1 learned, paraphrase learned as distinct id)")
+    print("  - Q1 embedding is 1024-dim (bge-m3)")
+    print("  - Q1.use_count == 2: matched by an EXACT re-ask AND a paraphrase")
     print(f"  - Q1 key_insight: {e1.get('key_insight')!r}")
     return 0
 
