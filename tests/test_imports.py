@@ -413,6 +413,13 @@ class TestImportConflicts:
             pytest.fail(f"Found naming conflicts across modules:\n{conflict_msg}")
 
 
+def test_harness_public_api():
+    import prehend
+    from prehend import Harness, Runtime, MemoryConfig, Defaults
+    for name in ("Harness", "Runtime", "MemoryConfig", "Defaults"):
+        assert name in prehend.__all__
+
+
 class TestImportCompleteness:
     """Test that all expected imports are available."""
 
