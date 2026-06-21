@@ -24,7 +24,17 @@ ANTI_GIVE_UP_PATTERNS = [
         r"\bunable\s+to\s+find\b",
         r"\breturn\s+.*\b(unavailable|unknown)\b",
         r"\bconclude\s+.*\b(unavailable|unknown|missing)\b",
-        r"\bstate\s+.*\b(unavailable|unknown)\b",
+        r"\bstate\s+.*\b(unavailable|unknown|missing|absent)\b",
+        # "information is missing / not present" family. The old patterns only
+        # matched "data ...", so an insight phrased about "information" slipped
+        # through and poisoned a v13 multihop bank with capitulation lessons.
+        r"\binformation\s+is\s+(missing|absent|unavailable)\b",
+        r"\binformation\s+(is\s+)?not\s+(present|available|provided|found)\b",
+        # "the context is garbled/ciphertext/nonsensical/unintelligible -> give
+        # up" framing. A constructive lesson would say re-read/retry/verify
+        # instead, which PROTECTIVE_PATTERNS overrides below.
+        r"\b(garbled|ciphertext|gibberish|nonsensical|unintelligible)\b",
+        r"\bno\s+human.?readable\b",
     ]
 ]
 
