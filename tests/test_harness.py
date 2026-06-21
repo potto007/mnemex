@@ -1,5 +1,6 @@
 import dataclasses
-from prehend.harness import Defaults, VETTED, Runtime, MemoryConfig, detect_runtime
+from prehend.harness import Defaults, VETTED, Runtime, MemoryConfig, detect_runtime, Harness
+from prehend.core.srlm import SRLM
 
 
 class TestSupportingTypes:
@@ -18,6 +19,48 @@ class TestSupportingTypes:
         assert (rt.slots, rt.ctx) == (4, 98304)
         mc = MemoryConfig(bank_dir="/tmp/bank", embed_model="bge-m3", reflect_model="m")
         assert mc.embed_url is None and mc.k_max is None
+
+
+def _h(**kw):
+    # base_url unused at construction (backends connect lazily), like test_srlm.py
+    return Harness(model="m", base_url="http://localhost:9999/v1",
+                   runtime=Runtime(slots=4, ctx=98304), **kw)
+
+
+class TestHarnessCore:
+    def test_builds_srlm_with_vetted_and_runtime(self):
+        h = _h()
+        assert isinstance(h.srlm, SRLM)
+        assert h.runtime == Runtime(slots=4, ctx=98304)
+        assert h.srlm.max_concurrent_subcalls == 4          # from slots
+        assert h.srlm.max_iterations == VETTED.max_iterations
+        assert h.srlm.max_depth == VETTED.max_depth
+
+    def test_auto_runtime_falls_back_when_probe_ambiguous(self):
+        h = Harness(model="m", base_url="http://localhost:9999/v1",
+                    runtime="auto",
+                    # inject ambiguous probe via monkeypatch-free seam:
+                    )
+        # default probe will fail to connect -> fallback to defaults slot count
+        assert h.runtime.slots == VETTED.max_concurrent_subcalls
+        assert h.srlm.max_concurrent_subcalls == VETTED.max_concurrent_subcalls
+
+    def test_hooks_reach_srlm(self):
+        sentinel_tools = {"mytool": {"tool": lambda: 1, "description": "d"}}
+        seen = {}
+        h = _h(subcall_verifier="V", answer_verifier="A", max_answer_retries=5,
+               custom_tools=sentinel_tools, system_addendum="EXTRA",
+               observability=lambda srlm: seen.setdefault("srlm", srlm))
+        assert h.srlm.subcall_verifier == "V"
+        assert h.srlm.answer_verifier == "A"
+        assert h.srlm.max_answer_retries == 5
+        assert h.srlm.custom_tools == sentinel_tools
+        assert seen["srlm"] is h.srlm            # observability hook ran with raw SRLM
+
+    def test_completion_delegates_to_solver(self):
+        h = _h()
+        h.solver = type("S", (), {"completion": lambda self, c, q: f"{c}|{q}"})()
+        assert h.completion("ctx", "qry") == "ctx|qry"
 
 
 class TestDetectRuntime:

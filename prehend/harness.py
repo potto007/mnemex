@@ -6,7 +6,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 import json
+import logging
 import urllib.request
+
+from prehend.core.srlm import SRLM
+
+_log = logging.getLogger("prehend.harness")
 
 
 @dataclass(frozen=True)
@@ -78,3 +83,81 @@ def detect_runtime(
     if rt is None or rt.slots <= 0:
         return None
     return rt
+
+
+class Harness:
+    """High-level entry point that assembles SRLM from vetted defaults + resolved runtime."""
+
+    def __init__(
+        self,
+        model: str,
+        base_url: str,
+        *,
+        api_key: str = "not-needed",
+        timeout: float | None = None,
+        runtime: "Runtime | str" = "auto",
+        defaults: Defaults | None = None,
+        system_addendum: str | None = None,
+        subcall_verifier=None,
+        answer_verifier=None,
+        max_answer_retries: int | None = None,
+        custom_tools: dict | None = None,
+        observability: Callable[[object], None] | None = None,
+        logger=None,
+        memory=None,            # behavior added in Task 4
+    ):
+        d = defaults or VETTED
+        self.runtime = self._resolve_runtime(runtime, base_url, api_key, d)
+
+        backend_kwargs = {
+            "model_name": model, "base_url": base_url, "api_key": api_key,
+            "max_retries": d.max_retries, "stream": d.stream,
+        }
+        subcall_kwargs = dict(backend_kwargs)
+        subcall_kwargs["default_extra_body"] = {
+            "chat_template_kwargs": {"enable_thinking": d.subcall_enable_thinking}
+        }
+        srlm_kwargs = dict(
+            backend="openai",
+            backend_kwargs=backend_kwargs,
+            other_backends=["openai"],
+            other_backend_kwargs=[subcall_kwargs],
+            environment="local",
+            environment_kwargs={"max_output_chars": d.max_output_chars},
+            max_iterations=d.max_iterations,
+            max_depth=d.max_depth,
+            max_errors=d.max_errors,
+            max_timeout=timeout,
+            max_concurrent_subcalls=self.runtime.slots,
+            soft_timeout_pct=d.soft_timeout_pct,
+            logger=logger,
+            verbose=False,
+        )
+        if system_addendum is not None:
+            srlm_kwargs["custom_system_prompt"] = system_addendum
+        if subcall_verifier is not None:
+            srlm_kwargs["subcall_verifier"] = subcall_verifier
+        if answer_verifier is not None:
+            srlm_kwargs["answer_verifier"] = answer_verifier
+        if max_answer_retries is not None:
+            srlm_kwargs["max_answer_retries"] = max_answer_retries
+        if custom_tools is not None:
+            srlm_kwargs["custom_tools"] = custom_tools
+
+        self.srlm = SRLM(**srlm_kwargs)
+        if observability is not None:
+            observability(self.srlm)
+        self.solver = self.srlm     # Task 4 may wrap this
+
+    def _resolve_runtime(self, runtime, base_url, api_key, d: Defaults) -> Runtime:
+        if isinstance(runtime, Runtime):
+            return runtime
+        detected = detect_runtime(base_url, api_key=api_key)
+        if detected is not None:
+            return detected
+        _log.info("harness: runtime probe ambiguous; falling back to slots=%d",
+                  d.max_concurrent_subcalls)
+        return Runtime(slots=d.max_concurrent_subcalls)
+
+    def completion(self, context: str, query: str) -> str:
+        return self.solver.completion(context, query)
