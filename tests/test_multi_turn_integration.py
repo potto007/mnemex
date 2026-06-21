@@ -12,9 +12,9 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-import lm_repl.core.rlm as rlm_module
-from lm_repl import RLM
-from lm_repl.core.types import ModelUsageSummary, UsageSummary
+import mnemex.core.rlm as rlm_module
+from mnemex import RLM
+from mnemex.core.types import ModelUsageSummary, UsageSummary
 
 
 def create_mock_lm(responses: list[str]) -> Mock:

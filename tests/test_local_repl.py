@@ -2,7 +2,7 @@
 
 import os
 
-from lm_repl.environments.local_repl import LocalREPL
+from mnemex.environments.local_repl import LocalREPL
 
 
 class TestLocalREPLBasic:

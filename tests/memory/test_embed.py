@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import math
 
-from lm_repl.memory.embed import EmbeddingBackend, HashingEmbeddingBackend, cosine
+from mnemex.memory.embed import EmbeddingBackend, HashingEmbeddingBackend, cosine
 
 
 def test_cosine_of_identical_vectors_is_one():

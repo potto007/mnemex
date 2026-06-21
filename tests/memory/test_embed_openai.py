@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from lm_repl.memory.embed import EmbeddingBackend
-from lm_repl.memory.embed_openai import OpenAIEmbeddingBackend
+from mnemex.memory.embed import EmbeddingBackend
+from mnemex.memory.embed_openai import OpenAIEmbeddingBackend
 
 
 class FakeEmbeddings:

@@ -32,8 +32,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv  # repo rule: scripts hitting the server load_dotenv()
 
-from lm_repl.core.srlm import SRLM
-from lm_repl.memory import (
+from mnemex.core.srlm import SRLM
+from mnemex.memory import (
     HashingEmbeddingBackend,
     OpenAIReflectFn,
     build_memory_harness,

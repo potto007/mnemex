@@ -1,8 +1,8 @@
 """Tests for mnemex retrieval (cosine ranking over the bank)."""
 from __future__ import annotations
 
-from lm_repl.memory.bank import Bank
-from lm_repl.memory.retrieve import retrieve
+from mnemex.memory.bank import Bank
+from mnemex.memory.retrieve import retrieve
 
 
 class FakeBackend:

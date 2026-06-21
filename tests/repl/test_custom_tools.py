@@ -11,7 +11,7 @@ Run with: uv run pytest tests/repl/test_custom_tools.py -v
 
 import pytest
 
-from lm_repl.environments import (
+from mnemex.environments import (
     RESERVED_TOOL_NAMES,
     SupportsCustomTools,
     extract_tool_value,
@@ -20,7 +20,7 @@ from lm_repl.environments import (
     parse_tool_entry,
     validate_custom_tools,
 )
-from lm_repl.environments.local_repl import LocalREPL
+from mnemex.environments.local_repl import LocalREPL
 
 # =============================================================================
 # Test Fixtures

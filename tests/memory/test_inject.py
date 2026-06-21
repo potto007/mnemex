@@ -1,7 +1,7 @@
 """Tests for mnemex memory-block rendering."""
 from __future__ import annotations
 
-from lm_repl.memory.inject import render_memory_block
+from mnemex.memory.inject import render_memory_block
 
 
 def _entry(eid, polarity="positive", key_insight="do the thing", **extra):

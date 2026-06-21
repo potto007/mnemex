@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from lm_repl.memory.pruning_rules import is_anti_give_up
+from mnemex.memory.pruning_rules import is_anti_give_up
 
 
 @pytest.mark.parametrize("text", [

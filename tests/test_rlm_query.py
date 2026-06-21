@@ -4,8 +4,8 @@ import threading
 import time
 from unittest.mock import MagicMock
 
-from lm_repl.core.types import RLMChatCompletion, UsageSummary
-from lm_repl.environments.local_repl import LocalREPL
+from mnemex.core.types import RLMChatCompletion, UsageSummary
+from mnemex.environments.local_repl import LocalREPL
 
 
 def _make_completion(response: str) -> RLMChatCompletion:

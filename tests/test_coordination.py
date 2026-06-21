@@ -9,8 +9,8 @@ import time
 
 import pytest
 
-from lm_repl.clients.coordination import CrossProcessGate
-from lm_repl.clients.scheduler import Priority
+from mnemex.clients.coordination import CrossProcessGate
+from mnemex.clients.scheduler import Priority
 
 KEY = "testkey0000000000"
 

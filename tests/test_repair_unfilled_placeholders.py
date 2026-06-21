@@ -6,10 +6,10 @@ model-created REPL variable and interpolates it before the sub-call runs. Opt-in
 mirrors repair_doubled_calls.
 """
 
-import lm_repl.environments.local_repl as local_repl
-from lm_repl.core.comms_utils import LMResponse
-from lm_repl.core.types import RLMChatCompletion, UsageSummary
-from lm_repl.environments.local_repl import LocalREPL
+import mnemex.environments.local_repl as local_repl
+from mnemex.core.comms_utils import LMResponse
+from mnemex.core.types import RLMChatCompletion, UsageSummary
+from mnemex.environments.local_repl import LocalREPL
 
 
 def _echo(prompt: str) -> RLMChatCompletion:
