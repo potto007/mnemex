@@ -1,5 +1,5 @@
 [project]
-name = "lm-repl"
+name = "mnemex"
 authors = [
     {name = "Alex Zhang", email = "altzhang@mit.edu"},
 ]
@@ -7,7 +7,7 @@ maintainers = [
     {name = "Paul Otto", email = "potto007@gmail.com"},
 ]
 version = "0.2.0"
-description = "LM-REPL: Recursive Language Models with Self-Reflective Program Search."
+description = "mnemex: a language-model harness that learns - recursive context offload with self-reflective program search and experience memory."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
@@ -32,9 +32,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/potto007/lm-repl"
-Repository = "https://github.com/potto007/lm-repl"
-Issues = "https://github.com/potto007/lm-repl/issues"
+Homepage = "https://github.com/potto007/mnemex"
+Repository = "https://github.com/potto007/mnemex"
+Issues = "https://github.com/potto007/mnemex/issues"
 Upstream = "https://github.com/alexzhang13/rlm"
 
 [project.optional-dependencies]
@@ -49,7 +49,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["lm_repl", "lm_repl.*"]
+include = ["mnemex", "mnemex.*"]
 
 [dependency-groups]
 dev = [

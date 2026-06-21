@@ -28,13 +28,13 @@ from pathlib import Path
 
 from dotenv import load_dotenv  # repo rule: scripts hitting the server load_dotenv()
 
-from lm_repl.core.srlm import SRLM
-from lm_repl.memory import (
+from mnemex.core.srlm import SRLM
+from mnemex.memory import (
     OpenAIEmbeddingBackend,
     OpenAIReflectFn,
     build_memory_harness,
 )
-from lm_repl.memory.retrieve import retrieve
+from mnemex.memory.retrieve import retrieve
 
 load_dotenv()
 

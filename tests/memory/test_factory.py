@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from lm_repl.memory.factory import build_memory_harness
-from lm_repl.memory.harness import MemoryHarness
+from mnemex.memory.factory import build_memory_harness
+from mnemex.memory.harness import MemoryHarness
 
 
 class FakeSolver:

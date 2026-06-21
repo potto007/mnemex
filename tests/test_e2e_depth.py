@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from lm_repl import RLM
+from mnemex import RLM
 
 
 @pytest.mark.skipif(

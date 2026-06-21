@@ -7,14 +7,14 @@ once a configurable fraction of max_timeout has elapsed, telling the model to
 answer from what it has gathered or refuse cleanly while time remains. This turns
 the slow tail into clean completions/refusals and caps tail latency.
 
-Mechanism lives in lm-repl (generic, default-off); the librarian supplies the
+Mechanism lives in mnemex (generic, default-off); the librarian supplies the
 policy message (its exact no-coverage refusal sentence).
 """
 
 from unittest.mock import patch
 
-from lm_repl import RLM
-from lm_repl.core.rlm import _SOFT_BUDGET_MSG, _soft_budget_due
+from mnemex import RLM
+from mnemex.core.rlm import _SOFT_BUDGET_MSG, _soft_budget_due
 from tests.mock_lm import MockLM
 
 # ---- pure decision function ---------------------------------------------------
@@ -114,8 +114,8 @@ def test_soft_budget_message_reaches_model_e2e():
     clock = iter([0.0] + [80.0] * 50)
 
     mock = MockLM(response_fn=respond)
-    with patch("lm_repl.core.rlm.get_client", return_value=mock), \
-         patch("lm_repl.core.rlm.time.perf_counter", lambda: next(clock, 80.0)):
+    with patch("mnemex.core.rlm.get_client", return_value=mock), \
+         patch("mnemex.core.rlm.time.perf_counter", lambda: next(clock, 80.0)):
         rlm = RLM(
             backend="openai",
             backend_kwargs={"model_name": "test", "base_url": "http://localhost:9999/v1"},

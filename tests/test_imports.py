@@ -11,21 +11,21 @@ class TestTopLevelImports:
     """Test top-level package imports."""
 
     def test_rlm_import(self):
-        """Test that main lm_repl package can be imported."""
-        import lm_repl
+        """Test that main mnemex package can be imported."""
+        import mnemex
 
-        assert hasattr(lm_repl, "RLM")
-        assert "RLM" in lm_repl.__all__
+        assert hasattr(mnemex, "RLM")
+        assert "RLM" in mnemex.__all__
 
     def test_rlm_rlm_import(self):
-        """Test that RLM class can be imported from lm_repl."""
-        from lm_repl import RLM
+        """Test that RLM class can be imported from mnemex."""
+        from mnemex import RLM
 
         assert RLM is not None
 
     def test_rlm_core_rlm_import(self):
-        """Test that RLM can be imported from lm_repl.core.rlm."""
-        from lm_repl.core.rlm import RLM
+        """Test that RLM can be imported from mnemex.core.rlm."""
+        from mnemex.core.rlm import RLM
 
         assert RLM is not None
 
@@ -35,41 +35,41 @@ class TestClientImports:
 
     def test_clients_module_import(self):
         """Test that clients module can be imported."""
-        import lm_repl.clients
+        import mnemex.clients
 
-        assert hasattr(lm_repl.clients, "get_client")
-        assert hasattr(lm_repl.clients, "BaseLM")
+        assert hasattr(mnemex.clients, "get_client")
+        assert hasattr(mnemex.clients, "BaseLM")
 
     def test_base_lm_import(self):
         """Test BaseLM import."""
-        from lm_repl.clients.base_lm import BaseLM
+        from mnemex.clients.base_lm import BaseLM
 
         assert BaseLM is not None
 
     def test_openai_client_import(self):
         """Test OpenAIClient import."""
         pytest.importorskip("openai")
-        from lm_repl.clients.openai import OpenAIClient
+        from mnemex.clients.openai import OpenAIClient
 
         assert OpenAIClient is not None
 
     def test_anthropic_client_import(self):
         """Test AnthropicClient import."""
         pytest.importorskip("anthropic")
-        from lm_repl.clients.anthropic import AnthropicClient
+        from mnemex.clients.anthropic import AnthropicClient
 
         assert AnthropicClient is not None
 
     def test_portkey_client_import(self):
         """Test PortkeyClient import."""
         pytest.importorskip("portkey_ai")
-        from lm_repl.clients.portkey import PortkeyClient
+        from mnemex.clients.portkey import PortkeyClient
 
         assert PortkeyClient is not None
 
     def test_get_client_function(self):
         """Test get_client function import."""
-        from lm_repl.clients import get_client
+        from mnemex.clients import get_client
 
         assert callable(get_client)
 
@@ -79,7 +79,7 @@ class TestCoreImports:
 
     def test_core_types_import(self):
         """Test core types imports."""
-        from lm_repl.core.types import (
+        from mnemex.core.types import (
             ClientBackend,
             CodeBlock,
             ModelUsageSummary,
@@ -101,19 +101,19 @@ class TestCoreImports:
 
     def test_core_rlm_import(self):
         """Test core RLM import."""
-        from lm_repl.core.rlm import RLM
+        from mnemex.core.rlm import RLM
 
         assert RLM is not None
 
     def test_core_lm_handler_import(self):
         """Test LMHandler import."""
-        from lm_repl.core.lm_handler import LMHandler
+        from mnemex.core.lm_handler import LMHandler
 
         assert LMHandler is not None
 
     def test_core_comms_utils_import(self):
         """Test comms_utils imports."""
-        from lm_repl.core.comms_utils import (
+        from mnemex.core.comms_utils import (
             LMRequest,
             LMResponse,
             send_lm_request,
@@ -135,15 +135,15 @@ class TestEnvironmentImports:
 
     def test_environments_module_import(self):
         """Test that environments module can be imported."""
-        import lm_repl.environments
+        import mnemex.environments
 
-        assert hasattr(lm_repl.environments, "get_environment")
-        assert hasattr(lm_repl.environments, "BaseEnv")
-        assert hasattr(lm_repl.environments, "LocalREPL")
+        assert hasattr(mnemex.environments, "get_environment")
+        assert hasattr(mnemex.environments, "BaseEnv")
+        assert hasattr(mnemex.environments, "LocalREPL")
 
     def test_base_env_import(self):
         """Test BaseEnv import."""
-        from lm_repl.environments.base_env import BaseEnv, IsolatedEnv, NonIsolatedEnv
+        from mnemex.environments.base_env import BaseEnv, IsolatedEnv, NonIsolatedEnv
 
         assert BaseEnv is not None
         assert IsolatedEnv is not None
@@ -151,33 +151,33 @@ class TestEnvironmentImports:
 
     def test_local_repl_import(self):
         """Test LocalREPL import."""
-        from lm_repl.environments.local_repl import LocalREPL
+        from mnemex.environments.local_repl import LocalREPL
 
         assert LocalREPL is not None
 
     def test_modal_repl_import(self):
         """Test ModalREPL import."""
         pytest.importorskip("modal")
-        from lm_repl.environments.modal_repl import ModalREPL
+        from mnemex.environments.modal_repl import ModalREPL
 
         assert ModalREPL is not None
 
     def test_docker_repl_import(self):
         """Test DockerREPL import."""
-        from lm_repl.environments.docker_repl import DockerREPL
+        from mnemex.environments.docker_repl import DockerREPL
 
         assert DockerREPL is not None
 
     def test_prime_repl_import(self):
         """Test PrimeREPL import."""
         pytest.importorskip("prime_sandboxes")
-        from lm_repl.environments.prime_repl import PrimeREPL
+        from mnemex.environments.prime_repl import PrimeREPL
 
         assert PrimeREPL is not None
 
     def test_get_environment_function(self):
         """Test get_environment function import."""
-        from lm_repl.environments import get_environment
+        from mnemex.environments import get_environment
 
         assert callable(get_environment)
 
@@ -187,22 +187,22 @@ class TestLoggerImports:
 
     def test_logger_module_import(self):
         """Test that logger module can be imported."""
-        import lm_repl.logger
+        import mnemex.logger
 
-        assert hasattr(lm_repl.logger, "RLMLogger")
-        assert hasattr(lm_repl.logger, "VerbosePrinter")
-        assert "RLMLogger" in lm_repl.logger.__all__
-        assert "VerbosePrinter" in lm_repl.logger.__all__
+        assert hasattr(mnemex.logger, "RLMLogger")
+        assert hasattr(mnemex.logger, "VerbosePrinter")
+        assert "RLMLogger" in mnemex.logger.__all__
+        assert "VerbosePrinter" in mnemex.logger.__all__
 
     def test_rlm_logger_import(self):
         """Test RLMLogger import."""
-        from lm_repl.logger.rlm_logger import RLMLogger
+        from mnemex.logger.rlm_logger import RLMLogger
 
         assert RLMLogger is not None
 
     def test_verbose_import(self):
         """Test VerbosePrinter import."""
-        from lm_repl.logger.verbose import VerbosePrinter
+        from mnemex.logger.verbose import VerbosePrinter
 
         assert VerbosePrinter is not None
 
@@ -212,7 +212,7 @@ class TestUtilsImports:
 
     def test_parsing_import(self):
         """Test parsing module import."""
-        from lm_repl.utils.parsing import (
+        from mnemex.utils.parsing import (
             find_code_blocks,
             format_execution_result,
             format_iteration,
@@ -224,7 +224,7 @@ class TestUtilsImports:
 
     def test_prompts_import(self):
         """Test prompts module import."""
-        from lm_repl.utils.prompts import (
+        from mnemex.utils.prompts import (
             RLM_SYSTEM_PROMPT,
             USER_PROMPT,
             build_rlm_system_prompt,
@@ -238,7 +238,7 @@ class TestUtilsImports:
 
     def test_rlm_utils_import(self):
         """Test rlm_utils module import."""
-        from lm_repl.utils.rlm_utils import filter_sensitive_keys
+        from mnemex.utils.rlm_utils import filter_sensitive_keys
 
         assert callable(filter_sensitive_keys)
 
@@ -247,40 +247,40 @@ class TestImportConflicts:
     """Test for import conflicts and naming issues."""
 
     def test_no_duplicate_names_in_rlm_all(self):
-        """Test that __all__ in lm_repl.__init__ has no duplicates."""
-        import lm_repl
+        """Test that __all__ in mnemex.__init__ has no duplicates."""
+        import mnemex
 
-        if hasattr(lm_repl, "__all__"):
-            all_items = lm_repl.__all__
+        if hasattr(mnemex, "__all__"):
+            all_items = mnemex.__all__
             assert len(all_items) == len(set(all_items)), (
-                f"Duplicate items in lm_repl.__all__: {all_items}"
+                f"Duplicate items in mnemex.__all__: {all_items}"
             )
 
     def test_no_duplicate_names_in_logger_all(self):
-        """Test that __all__ in lm_repl.logger.__init__ has no duplicates."""
-        import lm_repl.logger
+        """Test that __all__ in mnemex.logger.__init__ has no duplicates."""
+        import mnemex.logger
 
-        if hasattr(lm_repl.logger, "__all__"):
-            all_items = lm_repl.logger.__all__
+        if hasattr(mnemex.logger, "__all__"):
+            all_items = mnemex.logger.__all__
             assert len(all_items) == len(set(all_items)), (
-                f"Duplicate items in lm_repl.logger.__all__: {all_items}"
+                f"Duplicate items in mnemex.logger.__all__: {all_items}"
             )
 
     def test_all_declarations_match_exports(self):
         """Test that __all__ declarations match actual exports."""
-        import lm_repl
-        import lm_repl.logger
+        import mnemex
+        import mnemex.logger
 
-        # Test lm_repl.__all__
-        if hasattr(lm_repl, "__all__"):
-            for name in lm_repl.__all__:
-                assert hasattr(lm_repl, name), f"lm_repl.__all__ declares '{name}' but it's not exported"
+        # Test mnemex.__all__
+        if hasattr(mnemex, "__all__"):
+            for name in mnemex.__all__:
+                assert hasattr(mnemex, name), f"mnemex.__all__ declares '{name}' but it's not exported"
 
-        # Test lm_repl.logger.__all__
-        if hasattr(lm_repl.logger, "__all__"):
-            for name in lm_repl.logger.__all__:
-                assert hasattr(lm_repl.logger, name), (
-                    f"lm_repl.logger.__all__ declares '{name}' but it's not exported"
+        # Test mnemex.logger.__all__
+        if hasattr(mnemex.logger, "__all__"):
+            for name in mnemex.logger.__all__:
+                assert hasattr(mnemex.logger, name), (
+                    f"mnemex.logger.__all__ declares '{name}' but it's not exported"
                 )
 
     def test_no_circular_imports(self):
@@ -292,34 +292,34 @@ class TestImportConflicts:
         checks for every test that runs afterwards."""
         # Core modules that should always be importable
         core_modules = [
-            "lm_repl",
-            "lm_repl.clients",
-            "lm_repl.clients.base_lm",
-            "lm_repl.core",
-            "lm_repl.core.types",
-            "lm_repl.core.rlm",
-            "lm_repl.core.lm_handler",
-            "lm_repl.core.comms_utils",
-            "lm_repl.environments",
-            "lm_repl.environments.base_env",
-            "lm_repl.environments.local_repl",
-            "lm_repl.environments.docker_repl",
-            "lm_repl.logger",
-            "lm_repl.logger.rlm_logger",
-            "lm_repl.logger.verbose",
-            "lm_repl.utils",
-            "lm_repl.utils.parsing",
-            "lm_repl.utils.prompts",
-            "lm_repl.utils.rlm_utils",
+            "mnemex",
+            "mnemex.clients",
+            "mnemex.clients.base_lm",
+            "mnemex.core",
+            "mnemex.core.types",
+            "mnemex.core.rlm",
+            "mnemex.core.lm_handler",
+            "mnemex.core.comms_utils",
+            "mnemex.environments",
+            "mnemex.environments.base_env",
+            "mnemex.environments.local_repl",
+            "mnemex.environments.docker_repl",
+            "mnemex.logger",
+            "mnemex.logger.rlm_logger",
+            "mnemex.logger.verbose",
+            "mnemex.utils",
+            "mnemex.utils.parsing",
+            "mnemex.utils.prompts",
+            "mnemex.utils.rlm_utils",
         ]
 
         # Optional modules imported only when their dependency is available
         optional_modules = [
-            ("lm_repl.clients.openai", "openai"),
-            ("lm_repl.clients.anthropic", "anthropic"),
-            ("lm_repl.clients.portkey", "portkey_ai"),
-            ("lm_repl.environments.modal_repl", "modal"),
-            ("lm_repl.environments.prime_repl", "prime_sandboxes"),
+            ("mnemex.clients.openai", "openai"),
+            ("mnemex.clients.anthropic", "anthropic"),
+            ("mnemex.clients.portkey", "portkey_ai"),
+            ("mnemex.environments.modal_repl", "modal"),
+            ("mnemex.environments.prime_repl", "prime_sandboxes"),
         ]
 
         script = (
@@ -344,35 +344,35 @@ class TestImportConflicts:
         module_exports: dict[str, set[str]] = {}
 
         # Check main modules
-        import lm_repl
-        import lm_repl.clients
-        import lm_repl.environments
-        import lm_repl.logger
+        import mnemex
+        import mnemex.clients
+        import mnemex.environments
+        import mnemex.logger
 
-        if hasattr(lm_repl, "__all__"):
-            module_exports["lm_repl"] = set(lm_repl.__all__)
+        if hasattr(mnemex, "__all__"):
+            module_exports["mnemex"] = set(mnemex.__all__)
         else:
-            module_exports["lm_repl"] = {name for name in dir(lm_repl) if not name.startswith("_")}
+            module_exports["mnemex"] = {name for name in dir(mnemex) if not name.startswith("_")}
 
-        if hasattr(lm_repl.clients, "__all__"):
-            module_exports["lm_repl.clients"] = set(lm_repl.clients.__all__)
+        if hasattr(mnemex.clients, "__all__"):
+            module_exports["mnemex.clients"] = set(mnemex.clients.__all__)
         else:
-            module_exports["lm_repl.clients"] = {
-                name for name in dir(lm_repl.clients) if not name.startswith("_")
+            module_exports["mnemex.clients"] = {
+                name for name in dir(mnemex.clients) if not name.startswith("_")
             }
 
-        if hasattr(lm_repl.environments, "__all__"):
-            module_exports["lm_repl.environments"] = set(lm_repl.environments.__all__)
+        if hasattr(mnemex.environments, "__all__"):
+            module_exports["mnemex.environments"] = set(mnemex.environments.__all__)
         else:
-            module_exports["lm_repl.environments"] = {
-                name for name in dir(lm_repl.environments) if not name.startswith("_")
+            module_exports["mnemex.environments"] = {
+                name for name in dir(mnemex.environments) if not name.startswith("_")
             }
 
-        if hasattr(lm_repl.logger, "__all__"):
-            module_exports["lm_repl.logger"] = set(lm_repl.logger.__all__)
+        if hasattr(mnemex.logger, "__all__"):
+            module_exports["mnemex.logger"] = set(mnemex.logger.__all__)
         else:
-            module_exports["lm_repl.logger"] = {
-                name for name in dir(lm_repl.logger) if not name.startswith("_")
+            module_exports["mnemex.logger"] = {
+                name for name in dir(mnemex.logger) if not name.startswith("_")
             }
 
         # Check for conflicts (same name in multiple modules)
@@ -418,7 +418,7 @@ class TestImportCompleteness:
 
     def test_all_client_classes_importable(self):
         """Test that all client classes can be imported."""
-        from lm_repl.clients.base_lm import BaseLM
+        from mnemex.clients.base_lm import BaseLM
 
         # Verify BaseLM is a class
         assert isinstance(BaseLM, type)
@@ -426,7 +426,7 @@ class TestImportCompleteness:
         # Test optional client classes
         try:
             pytest.importorskip("openai")
-            from lm_repl.clients.openai import OpenAIClient
+            from mnemex.clients.openai import OpenAIClient
 
             assert isinstance(OpenAIClient, type)
         except Exception:
@@ -434,7 +434,7 @@ class TestImportCompleteness:
 
         try:
             pytest.importorskip("anthropic")
-            from lm_repl.clients.anthropic import AnthropicClient
+            from mnemex.clients.anthropic import AnthropicClient
 
             assert isinstance(AnthropicClient, type)
         except Exception:
@@ -442,7 +442,7 @@ class TestImportCompleteness:
 
         try:
             pytest.importorskip("portkey_ai")
-            from lm_repl.clients.portkey import PortkeyClient
+            from mnemex.clients.portkey import PortkeyClient
 
             assert isinstance(PortkeyClient, type)
         except Exception:
@@ -450,9 +450,9 @@ class TestImportCompleteness:
 
     def test_all_environment_classes_importable(self):
         """Test that all environment classes can be imported."""
-        from lm_repl.environments.base_env import BaseEnv, IsolatedEnv, NonIsolatedEnv
-        from lm_repl.environments.docker_repl import DockerREPL
-        from lm_repl.environments.local_repl import LocalREPL
+        from mnemex.environments.base_env import BaseEnv, IsolatedEnv, NonIsolatedEnv
+        from mnemex.environments.docker_repl import DockerREPL
+        from mnemex.environments.local_repl import LocalREPL
 
         # Verify they're all classes
         assert isinstance(BaseEnv, type)
@@ -464,7 +464,7 @@ class TestImportCompleteness:
         # Test optional ModalREPL
         try:
             pytest.importorskip("modal")
-            from lm_repl.environments.modal_repl import ModalREPL
+            from mnemex.environments.modal_repl import ModalREPL
 
             assert isinstance(ModalREPL, type)
         except Exception:
@@ -473,7 +473,7 @@ class TestImportCompleteness:
         # Test optional PrimeREPL
         try:
             pytest.importorskip("prime_sandboxes")
-            from lm_repl.environments.prime_repl import PrimeREPL
+            from mnemex.environments.prime_repl import PrimeREPL
 
             assert isinstance(PrimeREPL, type)
         except Exception:

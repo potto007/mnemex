@@ -1,6 +1,6 @@
 from dotenv import load_dotenv
 
-from lm_repl.clients.portkey import PortkeyClient
+from mnemex.clients.portkey import PortkeyClient
 
 load_dotenv()
 

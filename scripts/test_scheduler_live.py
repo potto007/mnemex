@@ -27,8 +27,8 @@ import openai
 
 sys.path.insert(0, "/home/potto/src/lm-repl")
 
-from lm_repl.clients.openai import OpenAIClient, _is_context_contention
-from lm_repl.clients.scheduler import RequestScheduler
+from mnemex.clients.openai import OpenAIClient, _is_context_contention
+from mnemex.clients.scheduler import RequestScheduler
 
 logging.basicConfig(
     level=logging.INFO,
@@ -119,7 +119,7 @@ async def contention_test(n_concurrent=12, tokens_per_prompt=12000, max_concurre
             if "retrying at p1" in record.getMessage():
                 retry_log_count += 1
 
-    logging.getLogger("lm_repl.clients.openai").addHandler(_RetryCounter())
+    logging.getLogger("mnemex.clients.openai").addHandler(_RetryCounter())
 
     async def do_one(i):
         prompt = make_prompt(tokens_per_prompt, uniq=i)
@@ -225,7 +225,7 @@ async def toolarge_test():
 
 def _multiproc_worker(idx, n_per_proc, toks, mc, coord_dir):
     """One OS process: own gate-equipped scheduler, unique prompts."""
-    from lm_repl.clients.coordination import CrossProcessGate
+    from mnemex.clients.coordination import CrossProcessGate
 
     key = hashlib.sha256(BASE_URL.encode()).hexdigest()[:16]
     gate = CrossProcessGate(coord_dir, key)

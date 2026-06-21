@@ -1,6 +1,6 @@
 """Tests for core types."""
 
-from lm_repl.core.types import (
+from mnemex.core.types import (
     CodeBlock,
     ModelUsageSummary,
     QueryMetadata,

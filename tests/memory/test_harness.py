@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from lm_repl.memory.bank import Bank
-from lm_repl.memory.harness import MemoryHarness
+from mnemex.memory.bank import Bank
+from mnemex.memory.harness import MemoryHarness
 
 
 class FakeSolver:

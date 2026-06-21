@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from lm_repl.memory.distill import TraceDistiller
+from mnemex.memory.distill import TraceDistiller
 
 
 class FakeBackend:

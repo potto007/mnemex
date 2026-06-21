@@ -1,4 +1,4 @@
-from lm_repl.environments.local_repl import LocalREPL
+from mnemex.environments.local_repl import LocalREPL
 
 
 def test_persistent_execution():

@@ -3,8 +3,8 @@
 from collections.abc import Callable
 from typing import Any
 
-from lm_repl.clients.base_lm import BaseLM
-from lm_repl.core.types import ModelUsageSummary, UsageSummary
+from mnemex.clients.base_lm import BaseLM
+from mnemex.core.types import ModelUsageSummary, UsageSummary
 
 
 class MockLM(BaseLM):

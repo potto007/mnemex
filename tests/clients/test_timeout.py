@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from lm_repl.clients.base_lm import DEFAULT_TIMEOUT
+from mnemex.clients.base_lm import DEFAULT_TIMEOUT
 
 
 class TestDefaultTimeout:
@@ -17,19 +17,19 @@ class TestDefaultTimeout:
 
     def test_base_lm_stores_timeout(self):
         """BaseLM should store timeout in instance."""
-        from lm_repl.clients.openai import OpenAIClient
+        from mnemex.clients.openai import OpenAIClient
 
-        with patch("lm_repl.clients.openai.openai.OpenAI"):
-            with patch("lm_repl.clients.openai.openai.AsyncOpenAI"):
+        with patch("mnemex.clients.openai.openai.OpenAI"):
+            with patch("mnemex.clients.openai.openai.AsyncOpenAI"):
                 client = OpenAIClient(api_key="test-key", model_name="gpt-4o")
                 assert client.timeout == DEFAULT_TIMEOUT
 
     def test_custom_timeout_override(self):
         """Custom timeout should override default."""
-        from lm_repl.clients.openai import OpenAIClient
+        from mnemex.clients.openai import OpenAIClient
 
-        with patch("lm_repl.clients.openai.openai.OpenAI"):
-            with patch("lm_repl.clients.openai.openai.AsyncOpenAI"):
+        with patch("mnemex.clients.openai.openai.OpenAI"):
+            with patch("mnemex.clients.openai.openai.AsyncOpenAI"):
                 client = OpenAIClient(api_key="test-key", model_name="gpt-4o", timeout=60.0)
                 assert client.timeout == 60.0
 
@@ -39,10 +39,10 @@ class TestOpenAIClientTimeout:
 
     def test_timeout_passed_to_client(self):
         """Timeout should be passed to OpenAI client."""
-        from lm_repl.clients.openai import OpenAIClient
+        from mnemex.clients.openai import OpenAIClient
 
-        with patch("lm_repl.clients.openai.openai.OpenAI") as mock_openai:
-            with patch("lm_repl.clients.openai.openai.AsyncOpenAI") as mock_async:
+        with patch("mnemex.clients.openai.openai.OpenAI") as mock_openai:
+            with patch("mnemex.clients.openai.openai.AsyncOpenAI") as mock_async:
                 OpenAIClient(api_key="test-key", model_name="gpt-4o", timeout=120.0)
 
                 # Check sync client received timeout
@@ -57,7 +57,7 @@ class TestOpenAIClientTimeout:
 
     def test_timeout_raises_exception(self):
         """Timeout should raise appropriate exception."""
-        from lm_repl.clients.openai import OpenAIClient
+        from mnemex.clients.openai import OpenAIClient
 
         # Create a mock client that raises timeout
         mock_client = MagicMock()
@@ -65,8 +65,8 @@ class TestOpenAIClientTimeout:
             "Connection timed out"
         )
 
-        with patch("lm_repl.clients.openai.openai.OpenAI", return_value=mock_client):
-            with patch("lm_repl.clients.openai.openai.AsyncOpenAI"):
+        with patch("mnemex.clients.openai.openai.OpenAI", return_value=mock_client):
+            with patch("mnemex.clients.openai.openai.AsyncOpenAI"):
                 client = OpenAIClient(api_key="test-key", model_name="gpt-4o", timeout=0.001)
 
                 with pytest.raises(httpx.TimeoutException):
@@ -78,10 +78,10 @@ class TestAnthropicClientTimeout:
 
     def test_timeout_passed_to_client(self):
         """Timeout should be passed to Anthropic client."""
-        from lm_repl.clients.anthropic import AnthropicClient
+        from mnemex.clients.anthropic import AnthropicClient
 
-        with patch("lm_repl.clients.anthropic.anthropic.Anthropic") as mock_anthropic:
-            with patch("lm_repl.clients.anthropic.anthropic.AsyncAnthropic") as mock_async:
+        with patch("mnemex.clients.anthropic.anthropic.Anthropic") as mock_anthropic:
+            with patch("mnemex.clients.anthropic.anthropic.AsyncAnthropic") as mock_async:
                 AnthropicClient(
                     api_key="test-key", model_name="claude-sonnet-4-20250514", timeout=120.0
                 )
@@ -100,10 +100,10 @@ class TestAzureOpenAIClientTimeout:
 
     def test_timeout_passed_to_client(self):
         """Timeout should be passed to Azure OpenAI client."""
-        from lm_repl.clients.azure_openai import AzureOpenAIClient
+        from mnemex.clients.azure_openai import AzureOpenAIClient
 
-        with patch("lm_repl.clients.azure_openai.openai.AzureOpenAI") as mock_azure:
-            with patch("lm_repl.clients.azure_openai.openai.AsyncAzureOpenAI") as mock_async:
+        with patch("mnemex.clients.azure_openai.openai.AzureOpenAI") as mock_azure:
+            with patch("mnemex.clients.azure_openai.openai.AsyncAzureOpenAI") as mock_async:
                 AzureOpenAIClient(
                     api_key="test-key",
                     model_name="gpt-4o",
@@ -125,10 +125,10 @@ class TestPortkeyClientTimeout:
 
     def test_timeout_passed_to_client(self):
         """Timeout should be passed to Portkey client."""
-        from lm_repl.clients.portkey import PortkeyClient
+        from mnemex.clients.portkey import PortkeyClient
 
-        with patch("lm_repl.clients.portkey.Portkey") as mock_portkey:
-            with patch("lm_repl.clients.portkey.AsyncPortkey") as mock_async:
+        with patch("mnemex.clients.portkey.Portkey") as mock_portkey:
+            with patch("mnemex.clients.portkey.AsyncPortkey") as mock_async:
                 PortkeyClient(api_key="test-key", model_name="gpt-4o", timeout=120.0)
 
                 mock_portkey.assert_called_once()
@@ -145,9 +145,9 @@ class TestGeminiClientTimeout:
 
     def test_timeout_passed_to_client(self):
         """Timeout should be passed to Gemini client via http_options."""
-        from lm_repl.clients.gemini import GeminiClient
+        from mnemex.clients.gemini import GeminiClient
 
-        with patch("lm_repl.clients.gemini.genai.Client") as mock_genai:
+        with patch("mnemex.clients.gemini.genai.Client") as mock_genai:
             GeminiClient(api_key="test-key", model_name="gemini-2.5-flash", timeout=120.0)
 
             mock_genai.assert_called_once()
