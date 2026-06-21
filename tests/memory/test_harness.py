@@ -163,3 +163,50 @@ def test_collect_failure_never_breaks_answer(tmp_path):
     harness = MemoryHarness(solver, bank, FakeBackend(), distiller=boom)
     result = harness.answer(context="ctx", question="q")
     assert result.final_answer == "ok"
+
+
+# --- completion() as a transparent Solver adapter (step 1) -------------------
+
+def test_completion_is_drop_in_for_answer(tmp_path):
+    # A memory-wrapped solver invoked via .completion(context, query) must drive
+    # the inner solver identically to .answer(context, query).
+    bank = Bank(tmp_path / "mem")
+    bank.append(_entry("a", [1.0, 0.0]))
+    solver = FakeSolver()
+    harness = MemoryHarness(solver, bank, FakeBackend({"Q": [1.0, 0.0]}), min_cosine=0.5)
+    harness.completion("ctx", "Q")
+    prompt, root_prompt = solver.calls[0]
+    assert prompt == "ctx"
+    assert "<Memory_Block>" in root_prompt
+    assert "insight a" in root_prompt
+    assert root_prompt.rstrip().endswith("Q")
+
+
+def test_completion_no_memory_path_keeps_root_prompt_byte_identical(tmp_path):
+    # No-memory invariant holds through the completion() seam too.
+    bank = Bank(tmp_path / "mem")  # empty
+    solver = FakeSolver()
+    harness = MemoryHarness(solver, bank, FakeBackend())
+    harness.completion("ctx", "What is 6*7?")
+    prompt, root_prompt = solver.calls[0]
+    assert prompt == "ctx"
+    assert root_prompt == "What is 6*7?"
+
+
+def test_completion_returns_solver_result(tmp_path):
+    bank = Bank(tmp_path / "mem")
+    solver = FakeSolver(answer="hello")
+    harness = MemoryHarness(solver, bank, FakeBackend())
+    result = harness.completion("ctx", "q")
+    assert result.final_answer == "hello"
+
+
+def test_completion_defaults_root_prompt_to_prompt(tmp_path):
+    # Single-arg completion(prompt): prompt doubles as the question.
+    bank = Bank(tmp_path / "mem")  # empty
+    solver = FakeSolver()
+    harness = MemoryHarness(solver, bank, FakeBackend())
+    harness.completion("only the prompt")
+    prompt, root_prompt = solver.calls[0]
+    assert prompt == "only the prompt"
+    assert root_prompt == "only the prompt"

@@ -60,6 +60,16 @@ class MemoryHarness:
         self.distiller = distiller
         self.tagger = tagger or NullTagger()
 
+    def completion(self, prompt: str, root_prompt: str | None = None) -> Any:
+        """Transparent :class:`Solver` adapter over :meth:`answer`.
+
+        Lets a memory-wrapped solver drop into any call site that drives a bare
+        ``Solver`` via ``completion(context, question)``. ``prompt`` is the
+        offloaded context; ``root_prompt`` is the question (defaulting to
+        ``prompt`` when omitted, matching the bare-solver convention).
+        """
+        return self.answer(prompt, root_prompt if root_prompt is not None else prompt)
+
     def answer(self, context: str, question: str) -> Any:
         """Solve ``question`` over ``context``, using and growing memory."""
         try:
