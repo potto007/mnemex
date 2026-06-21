@@ -41,7 +41,20 @@ that decision, not the client.
 Add a high-level `Harness` object to prehend that **owns the orchestration
 strategy and runtime decisions**, exposes **optional hooks** for legitimate
 domain extension, composes the memory layer as an option, and keeps `SRLM` as
-the unchanged low-level escape hatch. Migrate both clients onto it.
+the unchanged low-level escape hatch. Migrate `benchmark.py` onto it in this
+effort; design the Tier-C hooks so kb-librarian *can* adopt it next, but migrate
+it as a fast-follow (separate plan), not here.
+
+## Scope (de-risked)
+
+- **In scope (this plan):** the `Harness` API (Tier A defaults, Tier B hybrid
+  runtime, memory option, all Tier-C hooks), `benchmark.py` migration, ADR-0008.
+- **Fast-follow (separate plan):** kb-librarian `ask.py` migration. The Harness
+  ships with every hook librarian needs (`system_addendum`, `subcall_verifier`,
+  `answer_verifier`, `custom_tools`, `observability`, `defaults` override), so
+  the API is proven design-complete for it, but the riskier client (many tuned
+  knobs + the observability raw-SRLM caveat) is migrated separately to keep this
+  plan landable and green.
 
 ## Non-goals
 
@@ -51,6 +64,7 @@ the unchanged low-level escape hatch. Migrate both clients onto it.
 - No removal or behavior change of `SRLM` or `MemoryHarness` internals.
 - No change to kb-librarian's domain modules (`corpus`, `retrieval`,
   `citations`). Those stay in kb-librarian.
+- No kb-librarian migration in this plan (fast-follow, see Scope).
 
 ## The core model: three tiers of params
 
@@ -161,8 +175,9 @@ Net deletion. Benchmark also *gains* the reliability defaults it was missing.
 Its existing args (`memory_k_max`, `memory_min_cosine`, `embed_url`,
 `reflect_model`) map to `MemoryConfig` fields.
 
-### kb-librarian ask.py
-Replace its `SRLM(...)` with:
+### kb-librarian ask.py (FAST-FOLLOW, not this plan)
+Deferred to a separate plan to keep this one landable. Sketch of the target so
+the hooks are designed correctly now -- replace its `SRLM(...)` with:
 ```python
 h = Harness(
     model=settings.model, base_url=settings.base_url,
@@ -191,8 +206,11 @@ Harness.
     -> solver is wrapped (assert MemoryHarness in the chain).
   - each Tier-C hook reaches the SRLM (system_addendum, verifiers, custom_tools,
     observability hook invoked with the SRLM).
-- **Regression:** both clients' suites stay green post-migration -- benchmark's
-  benchmark/memory tests; kb-librarian's `test_librarian_ask.py` (fake solver).
+- **Regression (this plan):** benchmark's benchmark/memory tests stay green
+  post-migration. (kb-librarian's `test_librarian_ask.py` is the fast-follow's
+  gate, not this plan's.)
+- The Harness unit tests cover *all* Tier-C hooks even though only benchmark
+  migrates now, so the fast-follow librarian migration has no unproven surface.
 - Follow the repo's existing test patterns (fake solver / no network), per the
   memory-layer test suite.
 
@@ -203,12 +221,17 @@ Harness.
 - **Hidden coupling via the `MAPREDUCE_CONCURRENCY` env var.** If concurrency can
   only be injected via env today, the Harness setting it is a shared-process
   side effect; benchmark already runs each task in its own process (safe), but
-  document it and prefer an explicit-arg seam if one exists.
-- **kb-librarian behavior drift.** Its many tuned knobs must survive migration;
-  the `Defaults`-override + Tier-C hooks must cover every arg `ask.py` sets
-  today. Mitigation: enumerate `ask.py`'s current `SRLM(...)` args and map each
-  to defaults/hook before deleting the old block; keep `test_librarian_ask.py`
-  green.
+  document it and prefer an explicit-arg seam if one exists. **The plan's first
+  task is to determine this seam** (does `mapreduce.py` / SRLM accept concurrency
+  by argument, or is the env var the only injection point?); the Tier-B design
+  firms up once that is known.
+- **kb-librarian behavior drift (deferred to fast-follow).** Its many tuned knobs
+  must survive its eventual migration; the `Defaults`-override + Tier-C hooks
+  must cover every arg `ask.py` sets today. This plan de-risks by NOT migrating
+  librarian yet -- but it must ship every hook librarian needs. Mitigation: when
+  designing the hooks, enumerate `ask.py`'s current `SRLM(...)` args and confirm
+  each maps to a default or a Tier-C hook; the actual swap + `test_librarian_ask.py`
+  gate happen in the fast-follow plan.
 - **Two "Harness" names.** `Harness` (public) vs `MemoryHarness` (internal).
   Documented in ADR-0008; acceptable since MemoryHarness is no longer a
   client-facing wiring step.
