@@ -147,7 +147,22 @@ class Harness:
         self.srlm = SRLM(**srlm_kwargs)
         if observability is not None:
             observability(self.srlm)
-        self.solver = self.srlm     # Task 4 may wrap this
+        self.solver = self.srlm
+        if memory is not None:
+            from prehend.memory.factory import build_memory_harness_from_config
+            tight = {k: v for k, v in (("k_max", memory.k_max),
+                                       ("min_cosine", memory.min_cosine)) if v is not None}
+            self.solver = build_memory_harness_from_config(
+                self.srlm,
+                bank_dir=memory.bank_dir,
+                base_url=base_url,
+                embed_model=memory.embed_model,
+                reflect_model=memory.reflect_model,
+                api_key=api_key,
+                embed_base_url=memory.embed_url,
+                embed_api_key=memory.embed_api_key,
+                **tight,
+            )
 
     def _resolve_runtime(self, runtime, base_url, api_key, d: Defaults) -> Runtime:
         if isinstance(runtime, Runtime):

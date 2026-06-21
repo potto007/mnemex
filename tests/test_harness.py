@@ -1,6 +1,7 @@
 import dataclasses
 from prehend.harness import Defaults, VETTED, Runtime, MemoryConfig, detect_runtime, Harness
 from prehend.core.srlm import SRLM
+from prehend.memory.harness import MemoryHarness
 
 
 class TestSupportingTypes:
@@ -61,6 +62,21 @@ class TestHarnessCore:
         h = _h()
         h.solver = type("S", (), {"completion": lambda self, c, q: f"{c}|{q}"})()
         assert h.completion("ctx", "qry") == "ctx|qry"
+
+
+class TestHarnessMemory:
+    def test_no_memory_solver_is_srlm(self):
+        h = _h()
+        assert h.solver is h.srlm
+
+    def test_memory_wraps_solver(self, tmp_path):
+        h = _h(memory=MemoryConfig(
+            bank_dir=str(tmp_path / "bank"),
+            embed_model="bge-m3", reflect_model="m",
+            embed_url="http://localhost:8081/v1",
+        ))
+        assert isinstance(h.solver, MemoryHarness)
+        assert h.solver is not h.srlm
 
 
 class TestDetectRuntime:
