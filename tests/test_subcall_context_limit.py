@@ -273,3 +273,31 @@ class TestPromptRealignment:
         expected = f"{recommended_chunk_chars(98304, MODEL):,}"
         assert expected in system
         assert recommended_chunk_chars(98304, MODEL) < safe_chunk_chars(98304, MODEL)
+
+
+# --- contrastive failure channel config threading (ADR-0010) ---
+class TestFailureChannelConfig:
+    def test_memoryconfig_defaults(self):
+        from prehend.harness import MemoryConfig
+        c = MemoryConfig(bank_dir="/tmp/x", embed_model="e", reflect_model="r")
+        assert c.learn_from_failure is False
+        assert c.max_inject_negatives == 2
+
+    def test_harness_threads_failure_flags_to_memory(self):
+        from unittest.mock import patch
+        from prehend.harness import Harness, MemoryConfig
+        captured = {}
+
+        def fake_build(*a, **kw):
+            captured.update(kw)
+            return SimpleNamespace(completion=lambda *a, **k: None,
+                                   collect_pending=lambda *a, **k: None)
+
+        mc = MemoryConfig(bank_dir="/tmp/x", embed_model="bge", reflect_model=MODEL,
+                          learn_from_failure=True, max_inject_negatives=1)
+        with patch("prehend.memory.factory.build_memory_harness_from_config",
+                   side_effect=fake_build):
+            Harness(model=MODEL, base_url="http://localhost:9999/v1",
+                    runtime=Runtime(slots=4, ctx=98304), memory=mc)
+        assert captured["learn_from_failure"] is True
+        assert captured["max_inject_negatives"] == 1

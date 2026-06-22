@@ -393,3 +393,156 @@ def test_observer_exception_never_breaks_answer(tmp_path):
     )
     result = harness.answer(context="ctx", question="q")
     assert result.final_answer == "ok"  # telemetry failure swallowed
+
+
+# ===================================================================
+# Contrastive failure channel (ADR-0010 / 2026-06-22 spec)
+# ===================================================================
+
+def _mk_distiller(*, derived_from="success", eid="learned", polarity=None, embedding=None):
+    """A distiller that returns a controllable entry and records the `failed` arg."""
+    polarity = polarity or ("negative" if derived_from == "failure" else "positive")
+    embedding = embedding or [0.5, 0.5]
+    calls = []
+
+    def d(question, context, result, failed=False):
+        calls.append(failed)
+        e = _entry(eid, embedding)
+        e["polarity"] = polarity
+        e["derived_from"] = derived_from
+        return e
+
+    d.calls = calls
+    return d
+
+
+def test_learn_from_failure_defaults_false(tmp_path):
+    h = MemoryHarness(FakeSolver(), Bank(tmp_path / "m"), FakeBackend())
+    assert h.learn_from_failure is False
+
+
+def test_collect_pending_false_with_flag_distills_failure(tmp_path):
+    bank = Bank(tmp_path / "m")
+    d = _mk_distiller(derived_from="failure", eid="f")
+    h = MemoryHarness(FakeSolver(), bank, FakeBackend(), distiller=d,
+                      defer_collect=True, learn_from_failure=True)
+    h.answer(context="c", question="q")
+    h.collect_pending(correct=False)
+    assert d.calls == [True]  # distilled with failed=True
+    loaded = bank.load()
+    assert [e["id"] for e in loaded] == ["f"]
+    assert loaded[0]["derived_from"] == "failure"
+
+
+def test_collect_pending_false_without_flag_drops(tmp_path):
+    bank = Bank(tmp_path / "m")
+    d = _mk_distiller(eid="f")
+    h = MemoryHarness(FakeSolver(), bank, FakeBackend(), distiller=d,
+                      defer_collect=True)  # learn_from_failure default False
+    h.answer(context="c", question="q")
+    h.collect_pending(correct=False)
+    assert d.calls == []  # distiller never called
+    assert bank.load() == []
+
+
+def test_non_deferred_collect_defaults_failed_false(tmp_path):
+    bank = Bank(tmp_path / "m")
+    d = _mk_distiller(eid="x")
+    h = MemoryHarness(FakeSolver(), bank, FakeBackend(), distiller=d)  # not deferred
+    h.answer(context="c", question="q")
+    assert d.calls == [False]
+    assert [e["id"] for e in bank.load()] == ["x"]
+
+
+# --- provenance-aware collision (success supersedes failure) ---
+
+def test_wrong_then_right_success_supersedes_failure(tmp_path):
+    bank = Bank(tmp_path / "m")
+    fail = _mk_distiller(derived_from="failure", eid="exp_q")
+    h1 = MemoryHarness(FakeSolver(), bank, FakeBackend(), distiller=fail,
+                       defer_collect=True, learn_from_failure=True)
+    h1.answer(context="c", question="q")
+    h1.collect_pending(correct=False)
+    assert [(e["id"], e["derived_from"]) for e in bank.load()] == [("exp_q", "failure")]
+
+    succ = _mk_distiller(derived_from="success", eid="exp_q")
+    h2 = MemoryHarness(FakeSolver(), bank, FakeBackend(), distiller=succ,
+                       defer_collect=True, learn_from_failure=True)
+    h2.answer(context="c", question="q")
+    h2.collect_pending(correct=True)
+    loaded = bank.load()
+    assert len(loaded) == 1
+    assert loaded[0]["derived_from"] == "success"
+    assert loaded[0]["polarity"] == "positive"
+
+
+def test_right_then_wrong_failure_does_not_overwrite_success(tmp_path):
+    bank = Bank(tmp_path / "m")
+    succ = _mk_distiller(derived_from="success", eid="exp_q")
+    h1 = MemoryHarness(FakeSolver(), bank, FakeBackend(), distiller=succ,
+                       defer_collect=True, learn_from_failure=True)
+    h1.answer(context="c", question="q")
+    h1.collect_pending(correct=True)
+
+    fail = _mk_distiller(derived_from="failure", eid="exp_q")
+    h2 = MemoryHarness(FakeSolver(), bank, FakeBackend(), distiller=fail,
+                       defer_collect=True, learn_from_failure=True)
+    h2.answer(context="c", question="q")
+    h2.collect_pending(correct=False)
+    loaded = bank.load()
+    assert len(loaded) == 1
+    assert loaded[0]["derived_from"] == "success"  # success preserved
+
+
+def test_failure_then_failure_dedup(tmp_path):
+    bank = Bank(tmp_path / "m")
+    for _ in range(2):
+        fail = _mk_distiller(derived_from="failure", eid="exp_q")
+        h = MemoryHarness(FakeSolver(), bank, FakeBackend(), distiller=fail,
+                          defer_collect=True, learn_from_failure=True)
+        h.answer(context="c", question="q")
+        h.collect_pending(correct=False)
+    assert len(bank.load()) == 1
+
+
+# --- polarity-aware injection cap (Unit D) ---
+
+def _bank_with_polarities(tmp_path, n_pos, n_neg, emb):
+    bank = Bank(tmp_path / "m")
+    for i in range(n_pos):
+        e = _entry(f"pos{i}", emb); e["polarity"] = "positive"; bank.append(e)
+    for i in range(n_neg):
+        e = _entry(f"neg{i}", emb); e["polarity"] = "negative"; bank.append(e)
+    return bank
+
+
+def test_injection_caps_negatives(tmp_path):
+    bank = _bank_with_polarities(tmp_path, n_pos=2, n_neg=3, emb=[1.0, 0.0])
+    solver = FakeSolver()
+    h = MemoryHarness(solver, bank, FakeBackend({"Q": [1.0, 0.0]}),
+                      min_cosine=0.5, k_max=10, max_inject_negatives=1)
+    h.answer(context="c", question="Q")
+    _, root = solver.calls[0]
+    assert root.count('polarity="negative"') == 1
+    assert root.count('polarity="positive"') == 2
+
+
+def test_all_negative_retrieval_capped(tmp_path):
+    bank = _bank_with_polarities(tmp_path, n_pos=0, n_neg=4, emb=[1.0, 0.0])
+    solver = FakeSolver()
+    h = MemoryHarness(solver, bank, FakeBackend({"Q": [1.0, 0.0]}),
+                      min_cosine=0.5, k_max=10, max_inject_negatives=2)
+    h.answer(context="c", question="Q")
+    _, root = solver.calls[0]
+    assert root.count('polarity="negative"') == 2
+
+
+def test_bump_stats_only_for_injected(tmp_path):
+    bank = _bank_with_polarities(tmp_path, n_pos=1, n_neg=3, emb=[1.0, 0.0])
+    solver = FakeSolver()
+    h = MemoryHarness(solver, bank, FakeBackend({"Q": [1.0, 0.0]}),
+                      min_cosine=0.5, k_max=10, max_inject_negatives=1)
+    h.answer(context="c", question="Q")
+    counts = sorted(e["stats"]["use_count"] for e in bank.load())
+    # 1 positive + 1 negative injected (bumped to 1); 2 negatives capped out (0)
+    assert counts == [0, 0, 1, 1]

@@ -247,3 +247,27 @@ def test_from_config_embed_endpoint_defaults_to_base_url(monkeypatch, tmp_path):
     # No embed_base_url/embed_api_key -> embed reuses the single endpoint + key.
     assert seen["embed"]["base_url"] == "http://localhost:8080/v1"
     assert seen["embed"]["api_key"] == "shared-key"
+
+
+# --- contrastive failure channel threading (ADR-0010) ---
+
+def test_factory_threads_learn_from_failure_and_cap(tmp_path):
+    harness = build_memory_harness(
+        FakeSolver(), tmp_path / "mem",
+        embed_backend=ConstBackend(),
+        reflect_fn=_reflect_fn({"key_insight": "k"}),
+        learn_from_failure=True,
+        max_inject_negatives=1,
+    )
+    assert harness.learn_from_failure is True
+    assert harness.max_inject_negatives == 1
+
+
+def test_factory_defaults_preserve_correct_only(tmp_path):
+    harness = build_memory_harness(
+        FakeSolver(), tmp_path / "mem",
+        embed_backend=ConstBackend(),
+        reflect_fn=_reflect_fn({"key_insight": "k"}),
+    )
+    assert harness.learn_from_failure is False
+    assert harness.max_inject_negatives == 2

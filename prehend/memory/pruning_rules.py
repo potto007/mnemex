@@ -52,6 +52,29 @@ PROTECTIVE_PATTERNS = [
 ]
 
 
+# Behavioral premature-stop guards (ADR-0010 contrastive failure channel). Unlike
+# ANTI_GIVE_UP_PATTERNS (capitulation WORDING), these catch shallow-search-then-
+# give-up STRATEGIES a failure distiller would emit ("prefer the first and stop
+# searching", "return the best available estimate", "answer with the partial
+# result"). Applied ONLY to failure-channel content via is_premature_stop -- NOT
+# folded into is_anti_give_up, which runs on the success path too and would then
+# drop legitimate positive recipes (review note, 2026-06-22 spec).
+PREMATURE_STOP_PATTERNS = [
+    re.compile(p, re.IGNORECASE) for p in [
+        r"\bstop\s+searching\b",
+        r"\bprefer\s+the\s+first\b",
+        r"\bbest\s+available\b",
+        r"\bavoid\s+exhaustive\b",
+        r"\bcandidate\s+is\s+found,?\s+return\b",
+        r"\bcommit\s+to\s+the\s+most\s+frequent\b",
+        r"\bpartial\s+(result|answer)\b",
+        r"\bnarrow(ing)?\s+(the\s+)?scope\b",
+        r"\bsimplest\s+interpretation\b",
+        r"\bwithout\s+verif(y|ying)\b",
+    ]
+]
+
+
 def is_anti_give_up(text: str) -> bool:
     """True if ``text`` encodes a capitulation directive worth blocking.
 
@@ -62,6 +85,23 @@ def is_anti_give_up(text: str) -> bool:
         if p.search(text):
             return False
     for p in ANTI_GIVE_UP_PATTERNS:
+        if p.search(text):
+            return True
+    return False
+
+
+def is_premature_stop(text: str) -> bool:
+    """True if ``text`` encodes a shallow-search / premature-stop strategy.
+
+    Failure-channel ONLY (see PREMATURE_STOP_PATTERNS). A constructive directive
+    (re-read/retry/verify/widen) overrides via PROTECTIVE_PATTERNS, so guards that
+    say to do MORE survive. Heuristic, not complete -- the injection cap is the
+    structural backstop.
+    """
+    for p in PROTECTIVE_PATTERNS:
+        if p.search(text):
+            return False
+    for p in PREMATURE_STOP_PATTERNS:
         if p.search(text):
             return True
     return False

@@ -31,7 +31,27 @@ from prehend.memory.retrieve import (
 from prehend.memory.tagger import NullTagger, Tagger
 
 # (question, context, solver_result) -> a new entry dict, or None to write nothing.
-Distiller = Callable[[str, str, Any], dict | None]
+# The real TraceDistiller also accepts a keyword-only ``failed`` flag; the harness
+# passes it only on the failure path so plain 3-arg distillers stay compatible.
+Distiller = Callable[..., dict | None]
+
+
+def select_for_injection(entries: list[dict], *, max_negatives: int) -> list[dict]:
+    """Cap negative-polarity entries in an injection set (ADR-0010 Unit D).
+
+    Walks the (cosine-ranked) entries in order, admitting every positive but at
+    most ``max_negatives`` negatives, so failure-derived guard rules can never
+    crowd positive recipes out of an injected block. Preserves relevance order.
+    """
+    selected: list[dict] = []
+    negatives = 0
+    for e in entries:
+        if e.get("polarity") == "negative":
+            if negatives >= max_negatives:
+                continue
+            negatives += 1
+        selected.append(e)
+    return selected
 
 
 class Solver(Protocol):
@@ -82,6 +102,8 @@ class MemoryHarness:
         distiller: Distiller | None = None,
         tagger: Tagger | None = None,
         defer_collect: bool = False,
+        learn_from_failure: bool = False,
+        max_inject_negatives: int = 2,
         observer: MemoryObserver | None = None,
     ) -> None:
         self.solver = solver
@@ -92,6 +114,13 @@ class MemoryHarness:
         self.distiller = distiller
         self.tagger = tagger or NullTagger()
         self.observer = observer or NullObserver()
+        # Contrastive failure channel (ADR-0010): when True, collect_pending(False)
+        # distills a WRONG solve into a negative guard-rule entry instead of
+        # dropping it. Default off preserves correct-only. max_inject_negatives
+        # caps negative entries per injected block so they cannot crowd out
+        # positive recipes (the structural anti-poisoning backstop).
+        self.learn_from_failure = learn_from_failure
+        self.max_inject_negatives = max_inject_negatives
         # When True, answer() solves but does NOT distill; the caller invokes
         # collect_pending(correct) once it knows the outcome, so a wrong solve
         # never poisons the bank (the dominant no-upside cause on the v13
@@ -125,11 +154,17 @@ class MemoryHarness:
             query_tags = {}
         entries, scores, error, retrieve_seconds = self._retrieve(question, query_tags)
 
+        # Polarity-aware cap: never let failure-derived guard rules crowd positive
+        # recipes out of the block. Only INJECTED entries get a use_count bump, so
+        # a negative repeatedly retrieved-but-capped-out stays use_count==0 and is
+        # eligible for prune() (the bank self-cleans dominated negatives).
+        injected = select_for_injection(entries, max_negatives=self.max_inject_negatives)
+
         block = ""
-        if entries:
-            block = render_memory_block(entries)
+        if injected:
+            block = render_memory_block(injected)
             root_prompt = f"{block}\n{question}" if block else question
-            for entry in entries:
+            for entry in injected:
                 eid = entry.get("id")
                 if eid is not None:
                     try:
@@ -168,10 +203,14 @@ class MemoryHarness:
         self._pending = None
         if pending is None:
             return
-        if correct is False:
-            self._observe("on_collect", outcome="dropped", seconds=0.0, bank_size=None)
-            return
         question, context, result, query_tags = pending
+        if correct is False:
+            if self.learn_from_failure:
+                # Contrastive failure channel: distill a negative guard rule.
+                self._collect(question, context, result, query_tags, failed=True)
+            else:
+                self._observe("on_collect", outcome="dropped", seconds=0.0, bank_size=None)
+            return
         self._collect(question, context, result, query_tags)
 
     def _retrieve(
@@ -194,15 +233,28 @@ class MemoryHarness:
         except Exception:
             return [], [], True, time.perf_counter() - t0
 
-    def _collect(self, question: str, context: str, result: Any, query_tags: dict) -> None:
-        """Best-effort distillation of a new experience; never raises."""
+    def _collect(
+        self, question: str, context: str, result: Any, query_tags: dict,
+        *, failed: bool = False,
+    ) -> None:
+        """Best-effort distillation of a new experience; never raises.
+
+        Provenance-aware collision (ADR-0010): a SUCCESS supersedes a same-id
+        FAILURE entry (we now know how to solve it); a FAILURE never overwrites or
+        shadows a success; same-provenance collisions dedup. ``failed`` is only
+        passed to the distiller on the failure path so plain 3-arg distillers stay
+        compatible on the success path.
+        """
         if self.distiller is None:
             return
         t0 = time.perf_counter()
         outcome = "error"
         bank_size: int | None = None
         try:
-            entry = self.distiller(question, context, result)
+            entry = (
+                self.distiller(question, context, result, failed=True)
+                if failed else self.distiller(question, context, result)
+            )
             if not entry:
                 outcome = "empty"
                 return
@@ -210,12 +262,23 @@ class MemoryHarness:
                 entry["tags"] = dict(query_tags)
             existing = self.bank.load()
             eid = entry.get("id")
-            if eid is not None and any(e.get("id") == eid for e in existing):
-                outcome = "duplicate"  # one experience per id; do not append
-                return
-            self.bank.append(entry)
-            outcome = "written"
-            bank_size = len(existing) + 1
+            prior = next((e for e in existing if e.get("id") == eid), None) if eid is not None else None
+
+            if prior is None:
+                self.bank.append(entry)
+                outcome = "written"
+                bank_size = len(existing) + 1
+            elif prior.get("derived_from") == "failure" and entry.get("derived_from") != "failure":
+                # Success supersedes a failure guard rule for the same question.
+                updated = [entry if e.get("id") == eid else e for e in existing]
+                self.bank.save(updated)  # same length -> not a shrink -> accepted
+                outcome = "superseded"
+                bank_size = len(updated)
+            elif prior.get("derived_from") != "failure" and entry.get("derived_from") == "failure":
+                # A failure must never overwrite or shadow a known-good recipe.
+                outcome = "superseded_skip"
+            else:
+                outcome = "duplicate"  # same provenance, one experience per id
         except Exception:
             outcome = "error"
         finally:

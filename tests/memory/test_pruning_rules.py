@@ -51,3 +51,32 @@ def test_protective_override_beats_capitulation_phrase():
     # Mentions "data not available" but instructs to retry first -> keep it.
     text = "If data not available, retry with a different parameter before concluding."
     assert is_anti_give_up(text) is False
+
+
+# Contrastive failure channel (ADR-0010 / 2026-06-22 spec): the FAILURE distiller
+# emits behavioral premature-stop guards that is_anti_give_up (tuned for
+# capitulation WORDING) does NOT catch. is_premature_stop is a SEPARATE filter
+# applied ONLY to failure-channel content (folding into is_anti_give_up would
+# regress the success path).
+from prehend.memory.pruning_rules import is_premature_stop
+
+
+@pytest.mark.parametrize("text", [
+    "When chunks conflict, prefer the first match and stop searching.",
+    "When the answer is uncertain, return the best available estimate rather than over-searching.",
+    "Avoid exhaustive search; once a plausible candidate is found, return it.",
+    "When you cannot verify across all chunks, commit to the most frequent value.",
+    "When a multi-hop lookup is slow, narrow scope and answer with the partial result.",
+    "When the question is ambiguous, pick the simplest interpretation and stop.",
+])
+def test_premature_stop_guards_flagged(text):
+    assert is_premature_stop(text) is True
+
+
+@pytest.mark.parametrize("text", [
+    "When chunks conflict, re-read and cross-check across all chunks before concluding.",
+    "When a lookup seems slow, decompose into per-entity sub-queries and verify each.",
+    "When the first match is found, keep scanning the remaining chunks to confirm.",
+])
+def test_constructive_failure_guard_survives(text):
+    assert is_premature_stop(text) is False

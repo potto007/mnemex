@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from prehend.memory.embed import EmbeddingBackend
-from prehend.memory.pruning_rules import is_anti_give_up
+from prehend.memory.pruning_rules import is_anti_give_up, is_premature_stop
 
 ReflectFn = Callable[[str], str]
 
@@ -46,6 +46,46 @@ Do not restate the specific numbers; generalize to the problem shape.
 </Trajectory>"""
 
 
+FAILURE_REFLECT_PROMPT = """\
+This solve attempt was INCORRECT. Distill the single most useful CORRECTIVE lesson
+a future agent should apply to AVOID this failure, so it does better next time.
+Return ONLY a JSON object with these keys:
+  "key_insight": one corrective guard rule phrased "When <condition>, <action>"
+                 (50-70 words max).
+  "findings": list of short corrective strategy strings (may be empty).
+  "cautions": list of short guard-rule strings (may be empty).
+The corrective <action> MUST be something to do ADDITIONALLY or DIFFERENTLY -- e.g.
+re-read, cross-check across all chunks, decompose differently, verify each
+sub-result, widen the search, increase overlap. It must NOT be to stop early,
+accept a partial / first / best-available / most-frequent answer, prefer the first
+match, or narrow scope to save time: those reproduce the shallow-search-then-give-up
+failure this lesson exists to prevent. Do NOT produce a strategy to imitate. Do NOT
+conclude the data or information is missing, absent, unavailable, garbled, or
+unreadable -- that is capitulation, not a lesson. Generalize to the problem shape;
+do not restate specific numbers.
+
+<Question>
+{question}
+</Question>
+<FinalAnswer>
+{answer}
+</FinalAnswer>
+<Trajectory>
+{trajectory}
+</Trajectory>"""
+
+
+def _blocked(text: str, failed: bool) -> bool:
+    """Write-time content guard. Capitulation is blocked on both channels; the
+    behavioral premature-stop guard is blocked ONLY on the failure channel (it
+    would drop legitimate positive recipes on the success path)."""
+    if is_anti_give_up(text):
+        return True
+    if failed and is_premature_stop(text):
+        return True
+    return False
+
+
 class TraceDistiller:
     """Callable ``(question, context, result) -> entry dict | None``."""
 
@@ -62,11 +102,14 @@ class TraceDistiller:
         self.source = source
         self.trajectory_cap = trajectory_cap
 
-    def __call__(self, question: str, context: str, result: Any) -> dict | None:
+    def __call__(
+        self, question: str, context: str, result: Any, *, failed: bool = False
+    ) -> dict | None:
         answer = self._final_answer(result)
         trajectory = self._trajectory(result)[: self.trajectory_cap]
 
-        prompt = REFLECT_PROMPT.format(
+        template = FAILURE_REFLECT_PROMPT if failed else REFLECT_PROMPT
+        prompt = template.format(
             question=question, answer=answer, trajectory=trajectory
         )
         raw = self.reflect_fn(prompt) or ""
@@ -75,18 +118,23 @@ class TraceDistiller:
             return None
 
         key_insight = str(parsed.get("key_insight", "")).strip()
-        findings = [str(f) for f in (parsed.get("findings") or []) if not is_anti_give_up(str(f))]
-        cautions = [str(c) for c in (parsed.get("cautions") or []) if not is_anti_give_up(str(c))]
+        findings = [str(f) for f in (parsed.get("findings") or []) if not _blocked(str(f), failed)]
+        cautions = [str(c) for c in (parsed.get("cautions") or []) if not _blocked(str(c), failed)]
 
-        insight_ok = bool(key_insight) and not is_anti_give_up(key_insight)
+        insight_ok = bool(key_insight) and not _blocked(key_insight, failed)
         if not insight_ok and not findings and not cautions:
             return None
         if not insight_ok:
             key_insight = ""
 
-        polarity = str(parsed.get("polarity", "")).strip().lower()
-        if polarity not in _VALID_POLARITY:
-            polarity = "positive"
+        # A failure lesson is ALWAYS a negative guard rule (never an imitable
+        # recipe); the success path keeps the model's polarity.
+        if failed:
+            polarity = "negative"
+        else:
+            polarity = str(parsed.get("polarity", "")).strip().lower()
+            if polarity not in _VALID_POLARITY:
+                polarity = "positive"
 
         return {
             "id": _entry_id(question),
@@ -94,6 +142,7 @@ class TraceDistiller:
             "key_insight": key_insight,
             "findings": findings,
             "cautions": cautions,
+            "derived_from": "failure" if failed else "success",
             # Embed the bare question: retrieval embeds the bare query
             # (harness.retrieve(question)), so the stored key MUST match it.
             # Folding the offloaded context in here dilutes the key and breaks

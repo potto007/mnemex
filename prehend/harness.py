@@ -73,6 +73,12 @@ class MemoryConfig:
     # caller learns only from correct solves (avoids poisoning the bank with
     # give-up lessons distilled from failed tasks).
     defer_collect: bool = False
+    # Contrastive failure channel (ADR-0010): also learn NEGATIVE guard rules from
+    # WRONG solves (requires defer_collect + a scoring caller). Default off
+    # preserves correct-only. max_inject_negatives caps negative guard entries per
+    # injected block so failure lessons cannot crowd out positive recipes.
+    learn_from_failure: bool = False
+    max_inject_negatives: int = 2
     # Telemetry sink for retrieve/collect events. Pass
     # prehend.metrics.memory_observer() to emit the localai_prehend_memory_*
     # Prometheus series; None -> MemoryHarness installs a no-op NullObserver, so
@@ -236,6 +242,8 @@ class Harness:
                 reflect_enable_thinking=memory.reflect_enable_thinking,
                 reflect_max_tokens=memory.reflect_max_tokens,
                 defer_collect=memory.defer_collect,
+                learn_from_failure=memory.learn_from_failure,
+                max_inject_negatives=memory.max_inject_negatives,
                 observer=memory.observer,
                 **tight,
             )
@@ -256,9 +264,11 @@ class Harness:
     def record_outcome(self, correct: bool | None = True) -> None:
         """Distill the last solve when memory uses deferred collection.
 
-        Call after scoring the answer: ``correct is False`` drops the pending
-        experience (do not learn from a wrong solve); ``True``/``None`` distills.
-        No-op when memory is off or not deferring. Best-effort: never raises.
+        Call after scoring the answer: ``True``/``None`` distills a positive
+        experience. ``correct is False`` drops the pending solve, UNLESS
+        ``MemoryConfig.learn_from_failure`` is set, in which case it distills a
+        negative guard rule (the contrastive failure channel, ADR-0010). No-op
+        when memory is off or not deferring. Best-effort: never raises.
         """
         collect = getattr(self.solver, "collect_pending", None)
         if collect is not None:

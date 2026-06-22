@@ -118,3 +118,82 @@ def test_invalid_polarity_defaults_to_positive():
     reflect = _reflect({"key_insight": "k", "polarity": "sideways"})
     d = TraceDistiller(reflect, FakeBackend())
     assert d("q", "c", _result())["polarity"] == "positive"
+
+
+# --- Contrastive failure channel (ADR-0010 / 2026-06-22 spec) ---
+
+def test_failed_true_uses_failure_prompt_and_differs_from_success():
+    reflect = _reflect({"key_insight": "When chunks conflict, cross-check all before concluding"})
+    d = TraceDistiller(reflect, FakeBackend())
+    d("Q?", "ctx", _result(), failed=True)
+    fprompt = reflect.calls[0]
+    # the failure prompt frames the trace as incorrect and asks for a corrective guard
+    assert "INCORRECT" in fprompt or "incorrect" in fprompt
+    # and it differs from the success prompt
+    succ = _reflect({"key_insight": "k"})
+    TraceDistiller(succ, FakeBackend())("Q?", "ctx", _result(), failed=False)
+    assert fprompt != succ.calls[0]
+
+
+def test_failed_true_forces_negative_polarity():
+    # even when the model returns positive, a failure entry is negative
+    reflect = _reflect({"polarity": "positive",
+                        "key_insight": "When the join is wrong, verify each sub-result"})
+    d = TraceDistiller(reflect, FakeBackend())
+    entry = d("Q?", "ctx", _result(), failed=True)
+    assert entry["polarity"] == "negative"
+
+
+def test_failed_false_keeps_model_polarity():
+    reflect = _reflect({"polarity": "positive", "key_insight": "decompose first"})
+    d = TraceDistiller(reflect, FakeBackend())
+    entry = d("Q?", "ctx", _result(), failed=False)
+    assert entry["polarity"] == "positive"
+
+
+def test_failure_entry_has_derived_from_failure():
+    reflect = _reflect({"key_insight": "When the join is wrong, verify each sub-result"})
+    d = TraceDistiller(reflect, FakeBackend())
+    entry = d("Q?", "ctx", _result(), failed=True)
+    assert entry["derived_from"] == "failure"
+
+
+def test_success_entry_has_derived_from_success():
+    reflect = _reflect({"key_insight": "decompose first"})
+    d = TraceDistiller(reflect, FakeBackend())
+    entry = d("Q?", "ctx", _result(), failed=False)
+    assert entry["derived_from"] == "success"
+
+
+def test_failure_capitulation_still_filtered_to_none():
+    # a failure whose only content is capitulation yields no usable entry
+    reflect = _reflect({"key_insight": "the information is missing from the context",
+                        "findings": [], "cautions": []})
+    d = TraceDistiller(reflect, FakeBackend())
+    assert d("Q?", "ctx", _result(), failed=True) is None
+
+
+def test_failure_premature_stop_filtered_to_none():
+    reflect = _reflect({"key_insight": "When chunks conflict, prefer the first and stop searching",
+                        "findings": [], "cautions": []})
+    d = TraceDistiller(reflect, FakeBackend())
+    assert d("Q?", "ctx", _result(), failed=True) is None
+
+
+def test_failure_constructive_guard_survives():
+    reflect = _reflect({"key_insight": "When chunks conflict, re-read and cross-check before concluding",
+                        "findings": [], "cautions": []})
+    d = TraceDistiller(reflect, FakeBackend())
+    entry = d("Q?", "ctx", _result(), failed=True)
+    assert entry is not None
+    assert entry["polarity"] == "negative"
+
+
+def test_success_path_not_filtered_by_premature_stop():
+    # a positive recipe that mentions "prefer the first" must NOT be dropped on
+    # the success path (is_premature_stop is failure-only).
+    reflect = _reflect({"polarity": "positive",
+                        "key_insight": "index once, then prefer the first matching entity"})
+    d = TraceDistiller(reflect, FakeBackend())
+    entry = d("Q?", "ctx", _result(), failed=False)
+    assert entry is not None
