@@ -185,6 +185,19 @@ def test_from_config_reflect_budget_is_overridable(monkeypatch, tmp_path):
     assert kw["max_tokens"] == 2048
 
 
+def test_from_config_threads_defer_collect(monkeypatch, tmp_path):
+    from prehend.memory.factory import build_memory_harness_from_config
+    seen = {}
+    _patch_backends(monkeypatch, seen)
+    harness = build_memory_harness_from_config(
+        FakeSolver(), tmp_path / "mem",
+        base_url="http://localhost:8080/v1",
+        embed_model="bge-m3", reflect_model="gemma",
+        defer_collect=True,
+    )
+    assert harness.defer_collect is True
+
+
 def test_from_config_embed_endpoint_defaults_to_base_url(monkeypatch, tmp_path):
     from prehend.memory.factory import build_memory_harness_from_config
     seen = {}

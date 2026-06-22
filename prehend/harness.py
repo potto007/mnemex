@@ -55,6 +55,10 @@ class MemoryConfig:
     # solve (the dominant memory overhead / GPU-contention source).
     reflect_enable_thinking: bool = False
     reflect_max_tokens: int | None = 512
+    # Defer distillation until Harness.record_outcome(correct), so a scoring
+    # caller learns only from correct solves (avoids poisoning the bank with
+    # give-up lessons distilled from failed tasks).
+    defer_collect: bool = False
 
 
 def _default_probe(base_url: str, api_key: str) -> Runtime | None:
@@ -189,6 +193,7 @@ class Harness:
                 embed_api_key=memory.embed_api_key,
                 reflect_enable_thinking=memory.reflect_enable_thinking,
                 reflect_max_tokens=memory.reflect_max_tokens,
+                defer_collect=memory.defer_collect,
                 **tight,
             )
 
@@ -204,3 +209,17 @@ class Harness:
 
     def completion(self, context: str, query: str) -> "RLMChatCompletion":
         return self.solver.completion(context, query)
+
+    def record_outcome(self, correct: bool | None = True) -> None:
+        """Distill the last solve when memory uses deferred collection.
+
+        Call after scoring the answer: ``correct is False`` drops the pending
+        experience (do not learn from a wrong solve); ``True``/``None`` distills.
+        No-op when memory is off or not deferring. Best-effort: never raises.
+        """
+        collect = getattr(self.solver, "collect_pending", None)
+        if collect is not None:
+            try:
+                collect(correct)
+            except Exception:
+                pass

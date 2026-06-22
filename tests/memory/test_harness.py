@@ -108,6 +108,57 @@ def test_collect_none_writes_nothing(tmp_path):
     assert bank.load() == []
 
 
+def _learn_distiller(question, context, result):
+    return _entry("learned", [0.5, 0.5])
+
+
+def test_defer_collect_does_not_distill_in_answer(tmp_path):
+    # With defer_collect, answer() solves but does NOT write an experience -
+    # the caller decides later (once it knows correctness) via collect_pending.
+    bank = Bank(tmp_path / "mem")
+    harness = MemoryHarness(FakeSolver(), bank, FakeBackend(),
+                            distiller=_learn_distiller, defer_collect=True)
+    harness.answer(context="ctx", question="q")
+    assert bank.load() == []  # nothing distilled yet
+
+
+def test_collect_pending_correct_distills(tmp_path):
+    bank = Bank(tmp_path / "mem")
+    harness = MemoryHarness(FakeSolver(), bank, FakeBackend(),
+                            distiller=_learn_distiller, defer_collect=True)
+    harness.answer(context="ctx", question="q")
+    harness.collect_pending(correct=True)
+    assert [e["id"] for e in bank.load()] == ["learned"]
+
+
+def test_collect_pending_wrong_skips_distillation(tmp_path):
+    # The whole point of #1: do NOT learn from a wrong solve.
+    bank = Bank(tmp_path / "mem")
+    harness = MemoryHarness(FakeSolver(), bank, FakeBackend(),
+                            distiller=_learn_distiller, defer_collect=True)
+    harness.answer(context="ctx", question="q")
+    harness.collect_pending(correct=False)
+    assert bank.load() == []
+
+
+def test_collect_pending_unknown_correctness_distills(tmp_path):
+    # correct=None (no expected answer / unscored) -> conservatively keep it.
+    bank = Bank(tmp_path / "mem")
+    harness = MemoryHarness(FakeSolver(), bank, FakeBackend(),
+                            distiller=_learn_distiller, defer_collect=True)
+    harness.answer(context="ctx", question="q")
+    harness.collect_pending(correct=None)
+    assert [e["id"] for e in bank.load()] == ["learned"]
+
+
+def test_collect_pending_is_noop_without_pending(tmp_path):
+    bank = Bank(tmp_path / "mem")
+    harness = MemoryHarness(FakeSolver(), bank, FakeBackend(),
+                            distiller=_learn_distiller, defer_collect=True)
+    harness.collect_pending(correct=True)  # nothing solved yet
+    assert bank.load() == []
+
+
 def test_collect_skips_entry_whose_id_already_exists(tmp_path):
     bank = Bank(tmp_path / "mem")
     bank.append(_entry("dup", [0.1, 0.2]))  # id 'dup' already present

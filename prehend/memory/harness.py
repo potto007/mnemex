@@ -51,6 +51,7 @@ class MemoryHarness:
         min_cosine: float = DEFAULT_MIN_COSINE,
         distiller: Distiller | None = None,
         tagger: Tagger | None = None,
+        defer_collect: bool = False,
     ) -> None:
         self.solver = solver
         self.bank = bank
@@ -59,6 +60,13 @@ class MemoryHarness:
         self.min_cosine = min_cosine
         self.distiller = distiller
         self.tagger = tagger or NullTagger()
+        # When True, answer() solves but does NOT distill; the caller invokes
+        # collect_pending(correct) once it knows the outcome, so a wrong solve
+        # never poisons the bank (the dominant no-upside cause on the v13
+        # plain-multihop eval). Default off keeps the drop-in Solver contract:
+        # a bare completion() call still learns immediately.
+        self.defer_collect = defer_collect
+        self._pending: tuple[str, str, Any, dict] | None = None
 
     def completion(self, prompt: str, root_prompt: str | None = None) -> Any:
         """Transparent :class:`Solver` adapter over :meth:`answer`.
@@ -93,8 +101,25 @@ class MemoryHarness:
 
         result = self.solver.completion(context, root_prompt)
 
-        self._collect(question, context, result, query_tags)
+        if self.defer_collect:
+            self._pending = (question, context, result, query_tags)
+        else:
+            self._collect(question, context, result, query_tags)
         return result
+
+    def collect_pending(self, correct: bool | None = True) -> None:
+        """Distill the last deferred solve, gated on its outcome.
+
+        ``correct is False`` drops it (do not learn from a wrong solve);
+        ``True`` or ``None`` (unscored) distills. No-op when nothing is pending
+        or ``defer_collect`` was off. Best-effort: never raises.
+        """
+        pending = self._pending
+        self._pending = None
+        if pending is None or correct is False:
+            return
+        question, context, result, query_tags = pending
+        self._collect(question, context, result, query_tags)
 
     def _retrieve(self, question: str, query_tags: dict) -> tuple[list[dict], list[float]]:
         """Retrieve experiences, degrading to empty on any failure."""

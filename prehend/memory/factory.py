@@ -38,11 +38,15 @@ def build_memory_harness(
     k_max: int = DEFAULT_K_MAX,
     min_cosine: float = DEFAULT_MIN_COSINE,
     tagger: Tagger | None = None,
+    defer_collect: bool = False,
 ) -> MemoryHarness:
     """Assemble a memory-backed harness.
 
     Provide either a ready ``embed_backend`` or an ``embed_client`` + ``embed_model``;
     likewise either a ready ``reflect_fn`` or a ``reflect_client`` + ``reflect_model``.
+
+    ``defer_collect`` defers distillation until ``collect_pending(correct)`` so a
+    caller that scores the answer can learn only from correct solves.
     """
     backend = embed_backend
     if backend is None:
@@ -64,6 +68,7 @@ def build_memory_harness(
     return MemoryHarness(
         solver, Bank(bank_dir), backend,
         k_max=k_max, min_cosine=min_cosine, distiller=distiller, tagger=tagger,
+        defer_collect=defer_collect,
     )
 
 
@@ -83,6 +88,7 @@ def build_memory_harness_from_config(
     tagger: Tagger | None = None,
     reflect_enable_thinking: bool = False,
     reflect_max_tokens: int | None = 512,
+    defer_collect: bool = False,
 ) -> MemoryHarness:
     """Convenience: build embedding + reflect against OpenAI-compatible servers.
 
@@ -112,4 +118,5 @@ def build_memory_harness_from_config(
         solver, bank_dir,
         embed_backend=backend, reflect_fn=reflect,
         source=source, k_max=k_max, min_cosine=min_cosine, tagger=tagger,
+        defer_collect=defer_collect,
     )
