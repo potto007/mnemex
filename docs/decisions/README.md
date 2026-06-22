@@ -22,5 +22,6 @@ lives in [rlm-trainer `docs/decisions/README.md`](https://github.com/ClearBridge
 | [0007](0007-rename-mnemex-to-prehend.md) | Full rename `mnemex` -> `prehend` (package, PyPI, repo) | accepted |
 | [0008](0008-high-level-harness-api.md) | High-level `Harness` API (Tier A/B/C; runtime detection) | accepted |
 | [0009](0009-subcall-input-context-guard.md) | Sub-call input-size context guard (reject-with-hint; 1st input-axis guard) | accepted |
+| [0010](0010-auto-chunk-enforcement-for-oversized-subcalls.md) | Auto-chunk enforcement for oversized sub-calls (`context=` map-reduce) | accepted |
 
 `0000-template.md` is the MADR template for new records.

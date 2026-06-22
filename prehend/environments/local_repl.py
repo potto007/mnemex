@@ -23,7 +23,8 @@ from prehend.environments.base_env import (
     extract_tool_value,
     validate_custom_tools,
 )
-from prehend.utils.subcall_guard import oversize_rejection
+from prehend.utils.mapreduce import _compose, map_reduce
+from prehend.utils.subcall_guard import oversize_rejection, recommended_chunk_chars
 
 # A run of consecutive empty calls '()()...' - the .lower()() decode stutter.
 _DOUBLED_CALL = re.compile(r"\(\)(?:\(\))+")
@@ -365,10 +366,157 @@ class LocalREPL(NonIsolatedEnv):
 
         return _PLACEHOLDER.sub(_sub, prompt)
 
+    def _dispatch_with_context(
+        self,
+        prompt: str,
+        context: Any,
+        reduce: str | None,
+        *,
+        send_one: "Callable[[str], str]",
+        run_batch: "Callable[[list[str]], list[str]]",
+    ) -> str:
+        """Shared sub-call dispatch for the ``context=`` data channel (ADR-0010).
+
+        - No ``context``: send the bare ``prompt`` (today's behavior; the bare
+          oversized-prompt guard still applies inside ``send_one``).
+        - ``context`` that fits the recommended size: inline it into one send.
+        - Oversized ``context``: map-reduce it across the server slots via
+          ``run_batch`` (a context-free batched send), so an oversized data blob
+          never serializes into one slow prefill.
+        """
+        if context is None:
+            return send_one(prompt)
+        context = context if isinstance(context, str) else str(context)
+        # Fill model-created placeholders in BOTH the data and (via send_one /
+        # run_batch, which fill the composed prompt) the instruction, before
+        # chunking, so a {var} in context is substituted, not split.
+        context = self._fill_placeholders(context)
+        composed = _compose(prompt, context, "Text")
+
+        limit = self.subcall_context_limit
+        if limit is None:
+            # Guard disabled: no limit to chunk against. Inline and send (an
+            # oversized context here can overflow - the caller opted out).
+            return send_one(composed)
+
+        rec = recommended_chunk_chars(limit, self.model_name or "")
+        if len(composed) <= rec:
+            # Small enough to be one fast call: inline it.
+            return send_one(composed)
+
+        # Oversized: map-reduce. Size the per-chunk data budget so the composed
+        # chunk prompt (instruction + envelope + chunk) stays within `rec`.
+        overhead = len(_compose(prompt, "", "Text"))
+        chunk_chars = rec - overhead
+        if chunk_chars <= 0:
+            # The instruction alone exceeds the recommended size; we cannot make
+            # room for any data. Fall through to a single send so the inner guard
+            # reject-with-hints the oversized composed prompt.
+            return send_one(composed)
+
+        def _fits(text: str) -> bool:
+            return oversize_rejection(text, limit=limit, model=self.model_name or "") is None
+
+        result = map_reduce(
+            prompt,
+            context,
+            run_batch=run_batch,
+            fits=_fits,
+            chunk_chars=chunk_chars,
+            reduce_prompt=reduce,
+        )
+        return result.answer
+
     def _llm_query(
+        self,
+        prompt: str,
+        model: str | None = None,
+        priority: str | int | None = None,
+        *,
+        context: Any = None,
+        reduce: str | None = None,
+    ) -> str:
+        """LM completion. Pass large data via ``context=`` for auto map-reduce."""
+        return self._dispatch_with_context(
+            prompt,
+            context,
+            reduce,
+            send_one=lambda p: self._send(p, model, priority),
+            run_batch=lambda ps: self._send_batched(ps, model, priority),
+        )
+
+    def _llm_query_batched(
+        self,
+        prompts: list[str],
+        model: str | None = None,
+        priority: str | int | None = None,
+        *,
+        context: Any = None,
+        reduce: str | None = None,
+    ) -> list[str]:
+        """Batched LM completions. ``context=`` (scalar) applies to every prompt."""
+        if context is None:
+            return self._send_batched(prompts, model, priority)
+        return [
+            self._dispatch_with_context(
+                p,
+                context,
+                reduce,
+                send_one=lambda q: self._send(q, model, priority),
+                run_batch=lambda ps: self._send_batched(ps, model, priority),
+            )
+            for p in prompts
+        ]
+
+    def _rlm_query(
+        self,
+        prompt: str,
+        model: str | None = None,
+        *,
+        context: Any = None,
+        reduce: str | None = None,
+    ) -> str:
+        """Recursive RLM sub-call. Pass large data via ``context=`` for map-reduce."""
+        if self.subcall_fn is None:
+            return self._llm_query(prompt, model, context=context, reduce=reduce)
+        return self._dispatch_with_context(
+            prompt,
+            context,
+            reduce,
+            send_one=lambda p: self._rlm_send(p, model),
+            run_batch=lambda ps: self._rlm_send_batched(ps, model),
+        )
+
+    def _rlm_query_batched(
+        self,
+        prompts: list[str],
+        model: str | None = None,
+        *,
+        context: Any = None,
+        reduce: str | None = None,
+    ) -> list[str]:
+        """Batched recursive RLM sub-calls. ``context=`` (scalar) applies to each."""
+        if self.subcall_fn is None:
+            return self._llm_query_batched(prompts, model, context=context, reduce=reduce)
+        if context is None:
+            return self._rlm_send_batched(prompts, model)
+        return [
+            self._dispatch_with_context(
+                p,
+                context,
+                reduce,
+                send_one=lambda q: self._rlm_send(q, model),
+                run_batch=lambda ps: self._rlm_send_batched(ps, model),
+            )
+            for p in prompts
+        ]
+
+    def _send(
         self, prompt: str, model: str | None = None, priority: str | int | None = None
     ) -> str:
-        """Query the LM with a single plain completion (no REPL, no recursion).
+        """Context-free single LM send (the engine/seam building block).
+
+        Query the LM with a single plain completion (no REPL, no recursion).
 
         This always makes a direct LM call via the handler, regardless of depth.
 
@@ -408,13 +556,15 @@ class LocalREPL(NonIsolatedEnv):
         except Exception as e:
             return f"Error: LM query failed - {e}"
 
-    def _llm_query_batched(
+    def _send_batched(
         self,
         prompts: list[str],
         model: str | None = None,
         priority: str | int | None = None,
     ) -> list[str]:
-        """Query the LM with multiple prompts concurrently (no REPL, no recursion).
+        """Context-free batched LM send (the engine/seam building block).
+
+        Query the LM with multiple prompts concurrently (no REPL, no recursion).
 
         This always makes direct LM calls via the handler, regardless of depth.
 
@@ -475,8 +625,10 @@ class LocalREPL(NonIsolatedEnv):
         except Exception as e:
             return [f"Error: LM query failed - {e}"] * len(prompts)
 
-    def _rlm_query(self, prompt: str, model: str | None = None) -> str:
-        """Spawn a recursive RLM sub-call for deeper thinking on a subtask.
+    def _rlm_send(self, prompt: str, model: str | None = None) -> str:
+        """Context-free single recursive RLM send (the engine/seam building block).
+
+        Spawn a recursive RLM sub-call for deeper thinking on a subtask.
 
         When a subcall callback is available (max_depth > 1), this spawns a child
         RLM with its own REPL that can reason over the prompt iteratively.
@@ -495,10 +647,12 @@ class LocalREPL(NonIsolatedEnv):
                 return f"Error: RLM query failed - {e}"
 
         # Fall back to plain LM call if no recursive capability
-        return self._llm_query(prompt, model)
+        return self._send(prompt, model)
 
-    def _rlm_query_batched(self, prompts: list[str], model: str | None = None) -> list[str]:
-        """Spawn recursive RLM sub-calls for multiple prompts in parallel.
+    def _rlm_send_batched(self, prompts: list[str], model: str | None = None) -> list[str]:
+        """Context-free batched recursive RLM send (the engine/seam building block).
+
+        Spawn recursive RLM sub-calls for multiple prompts in parallel.
 
         Each prompt gets its own child RLM for deeper thinking. When multiple
         prompts are provided, subcalls run concurrently using a thread pool
@@ -559,7 +713,7 @@ class LocalREPL(NonIsolatedEnv):
             return results
 
         # Fall back to plain batched LM call if no recursive capability
-        return self._llm_query_batched(prompts, model)
+        return self._send_batched(prompts, model)
 
     def load_context(self, context_payload: dict | list | str):
         """Load context into the environment as context_0 (and 'context' alias)."""
