@@ -185,6 +185,42 @@ def test_from_config_reflect_budget_is_overridable(monkeypatch, tmp_path):
     assert kw["max_tokens"] == 2048
 
 
+def test_from_config_routes_reflect_to_separate_endpoint(monkeypatch, tmp_path):
+    # Distill can run on its own server (e.g. a small model on :8082) while the
+    # solver model stays on the :8080 router. reflect_base_url overrides; embed
+    # still routes independently.
+    from prehend.memory.factory import build_memory_harness_from_config
+    seen = {}
+    _patch_backends(monkeypatch, seen)
+    build_memory_harness_from_config(
+        FakeSolver(), tmp_path / "mem",
+        base_url="http://localhost:8080/v1",
+        embed_model="bge-m3", reflect_model="gemma-4-e4b",
+        embed_base_url="http://localhost:8081/v1",
+        reflect_base_url="http://localhost:8082/v1",
+        reflect_api_key="reflect-key",
+    )
+    assert seen["reflect"]["base_url"] == "http://localhost:8082/v1"
+    assert seen["reflect"]["model"] == "gemma-4-e4b"
+    assert seen["reflect"]["api_key"] == "reflect-key"
+    # embed and reflect endpoints are independent of each other and of base_url.
+    assert seen["embed"]["base_url"] == "http://localhost:8081/v1"
+
+
+def test_from_config_reflect_endpoint_defaults_to_base_url(monkeypatch, tmp_path):
+    from prehend.memory.factory import build_memory_harness_from_config
+    seen = {}
+    _patch_backends(monkeypatch, seen)
+    build_memory_harness_from_config(
+        FakeSolver(), tmp_path / "mem",
+        base_url="http://localhost:8080/v1",
+        embed_model="bge-m3", reflect_model="gemma", api_key="shared-key",
+    )
+    # No reflect_base_url -> reflect reuses the solver endpoint + key.
+    assert seen["reflect"]["base_url"] == "http://localhost:8080/v1"
+    assert seen["reflect"]["api_key"] == "shared-key"
+
+
 def test_from_config_threads_defer_collect(monkeypatch, tmp_path):
     from prehend.memory.factory import build_memory_harness_from_config
     seen = {}

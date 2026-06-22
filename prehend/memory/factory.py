@@ -82,6 +82,8 @@ def build_memory_harness_from_config(
     api_key: str = "EMPTY",
     embed_base_url: str | None = None,
     embed_api_key: str | None = None,
+    reflect_base_url: str | None = None,
+    reflect_api_key: str | None = None,
     source: str = "prehend",
     k_max: int = DEFAULT_K_MAX,
     min_cosine: float = DEFAULT_MIN_COSINE,
@@ -92,10 +94,12 @@ def build_memory_harness_from_config(
 ) -> MemoryHarness:
     """Convenience: build embedding + reflect against OpenAI-compatible servers.
 
-    Reflect (trace distillation) runs against ``base_url``. Embedding runs
-    against ``embed_base_url`` when given, else ``base_url`` -- this is the
-    common local setup where a small embedding model (e.g. bge-m3) is served on
-    its own port while the chat model is swapped on a single-model router.
+    Reflect (trace distillation) runs against ``reflect_base_url`` when given,
+    else ``base_url``; embedding against ``embed_base_url`` else ``base_url``.
+    Both can be split off the solver endpoint - the common local setup where a
+    small embedding model (e.g. bge-m3 on :8081) and a small/neutral distill
+    model (e.g. Gemma 4 e4b on :8082) run on their own ports while the solver
+    model is swapped on the single-model router (:8080), which must not swap.
 
     Distillation is mechanical JSON extraction, not reasoning, so by default
     reflect runs with thinking OFF and a bounded ``reflect_max_tokens``. Without
@@ -110,7 +114,8 @@ def build_memory_harness_from_config(
         api_key=embed_api_key or api_key,
     )
     reflect = OpenAIReflectFn.from_config(
-        base_url=base_url, model=reflect_model, api_key=api_key,
+        base_url=reflect_base_url or base_url, model=reflect_model,
+        api_key=reflect_api_key or api_key,
         extra_body={"chat_template_kwargs": {"enable_thinking": reflect_enable_thinking}},
         max_tokens=reflect_max_tokens,
     )

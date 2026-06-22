@@ -48,6 +48,11 @@ class MemoryConfig:
     reflect_model: str
     embed_url: str | None = None
     embed_api_key: str | None = None
+    # Distill endpoint: when set, reflect runs on its own server (e.g. a small
+    # neutral model like Gemma 4 e4b on :8082) instead of the solver router,
+    # which must not swap. Defaults to the solver base_url.
+    reflect_url: str | None = None
+    reflect_api_key: str | None = None
     k_max: int | None = None
     min_cosine: float | None = None
     # Trace distillation is mechanical JSON extraction: thinking OFF + bounded
@@ -191,6 +196,8 @@ class Harness:
                 api_key=api_key,
                 embed_base_url=memory.embed_url,
                 embed_api_key=memory.embed_api_key,
+                reflect_base_url=memory.reflect_url,
+                reflect_api_key=memory.reflect_api_key,
                 reflect_enable_thinking=memory.reflect_enable_thinking,
                 reflect_max_tokens=memory.reflect_max_tokens,
                 defer_collect=memory.defer_collect,
