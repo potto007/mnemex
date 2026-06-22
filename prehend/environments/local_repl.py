@@ -23,6 +23,7 @@ from prehend.environments.base_env import (
     extract_tool_value,
     validate_custom_tools,
 )
+from prehend.utils.subcall_guard import oversize_rejection
 
 # A run of consecutive empty calls '()()...' - the .lower()() decode stutter.
 _DOUBLED_CALL = re.compile(r"\(\)(?:\(\))+")
@@ -202,6 +203,8 @@ class LocalREPL(NonIsolatedEnv):
         repair_doubled_calls: bool = False,
         repair_unfilled_placeholders: bool = False,
         max_subcalls: int | None = None,
+        subcall_context_limit: int | None = None,
+        model_name: str | None = None,
         **kwargs,
     ):
         super().__init__(
@@ -218,6 +221,16 @@ class LocalREPL(NonIsolatedEnv):
         # completion (non-persistent), so it starts at 0 for each ask.
         self.max_subcalls = max_subcalls
         self._subcall_count = 0
+
+        # Input-size guard for llm_query / llm_query_batched. When
+        # subcall_context_limit is set, a prompt over the safe budget is rejected
+        # with an actionable chunk-and-map-reduce hint instead of being sent (the
+        # send would 400 "exceeds available context size" and spin to a timeout).
+        # model_name feeds count_tokens for the per-model token estimate. This
+        # intentionally covers llm_query - the strategy-verifier's llm_query
+        # exemption does NOT apply to this arithmetic input guard. None = off.
+        self.subcall_context_limit = subcall_context_limit
+        self.model_name = model_name
 
         self.max_output_chars = max_output_chars
         # Collapse a doubled empty-call '()()' -> '()' before exec. The .lower()()
@@ -372,6 +385,16 @@ class LocalREPL(NonIsolatedEnv):
             return _SUBCALL_BUDGET_MSG
 
         prompt = self._fill_placeholders(prompt)
+
+        # Input-size guard: reject an oversized prompt with an actionable hint
+        # rather than sending it (the send would 400 and spin to a timeout).
+        if self.subcall_context_limit is not None:
+            hint = oversize_rejection(
+                prompt, limit=self.subcall_context_limit, model=self.model_name or ""
+            )
+            if hint is not None:
+                return hint
+
         try:
             self._subcall_count += 1
             request = LMRequest(prompt=prompt, model=model, depth=self.depth, priority=priority)
@@ -407,29 +430,48 @@ class LocalREPL(NonIsolatedEnv):
             return ["Error: No LM handler configured"] * len(prompts)
         prompts = [self._fill_placeholders(p) for p in prompts]
 
-        # Circuit-breaker: dispatch only as many prompts as the per-ask budget
-        # allows; the overflow short-circuits with the wrap-up instruction so the
-        # batch cannot blow past the cap in one cell. None = unlimited.
+        # Input-size guard, per prompt: an oversized prompt is replaced with an
+        # actionable hint and NOT sent; the rest are dispatched normally (order
+        # preserved). Guarding per-prompt means one huge chunk doesn't sink the
+        # whole batch. The hint occupies the prompt's slot in the output.
+        oversize_hints: dict[int, str] = {}
+        if self.subcall_context_limit is not None:
+            for i, p in enumerate(prompts):
+                hint = oversize_rejection(
+                    p, limit=self.subcall_context_limit, model=self.model_name or ""
+                )
+                if hint is not None:
+                    oversize_hints[i] = hint
+        sendable = [(i, p) for i, p in enumerate(prompts) if i not in oversize_hints]
+
+        # Circuit-breaker: dispatch only as many sendable prompts as the per-ask
+        # budget allows; the overflow short-circuits with the wrap-up instruction
+        # so the batch cannot blow past the cap in one cell. None = unlimited.
         remaining = _subcall_budget_remaining(self._subcall_count, self.max_subcalls)
-        allowed = prompts if remaining is None else prompts[:remaining]
-        n_blocked = len(prompts) - len(allowed)
+        allowed = sendable if remaining is None else sendable[:remaining]
 
         try:
-            results: list[str] = []
+            # Map each sendable index to its result; oversized indices map to the
+            # hint, budget-blocked indices to the budget message.
+            by_index: dict[int, str] = dict(oversize_hints)
             if allowed:
                 self._subcall_count += len(allowed)
                 responses = send_lm_request_batched(
-                    self.lm_handler_address, allowed, model=model, depth=self.depth, priority=priority
+                    self.lm_handler_address,
+                    [p for _, p in allowed],
+                    model=model,
+                    depth=self.depth,
+                    priority=priority,
                 )
-                for response in responses:
+                for (idx, _p), response in zip(allowed, responses, strict=False):
                     if not response.success:
-                        results.append(f"Error: {response.error}")
+                        by_index[idx] = f"Error: {response.error}"
                     else:
                         self._pending_llm_calls.append(response.chat_completion)
-                        results.append(response.chat_completion.response)
-
-            results.extend([_SUBCALL_BUDGET_MSG] * n_blocked)
-            return results
+                        by_index[idx] = response.chat_completion.response
+            for idx, _p in sendable[len(allowed):]:
+                by_index[idx] = _SUBCALL_BUDGET_MSG
+            return [by_index[i] for i in range(len(prompts))]
         except Exception as e:
             return [f"Error: LM query failed - {e}"] * len(prompts)
 

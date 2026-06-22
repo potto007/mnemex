@@ -252,6 +252,9 @@ class SRLM(RLM):
             on_iteration_complete=self.on_iteration_complete,
             child_max_iterations=self.child_max_iterations,
             child_system_prompt=self.child_system_prompt,
+            # Keep the input-size guard following the candidate clone, like every
+            # other caller-set guard above (see the in-sync comment).
+            subcall_context_limit=self.subcall_context_limit,
         )
 
     def _multi_trajectory_completion(

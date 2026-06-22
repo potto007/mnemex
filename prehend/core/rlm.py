@@ -37,6 +37,7 @@ from prehend.utils.prompts import (
     build_user_prompt,
 )
 from prehend.utils.rlm_utils import filter_sensitive_keys
+from prehend.utils.subcall_guard import oversize_rejection, safe_chunk_chars
 from prehend.utils.token_utils import count_tokens, get_context_limit
 
 # Injected (as an assistant turn) to force a final answer once iterations are
@@ -163,6 +164,7 @@ class RLM:
         on_iteration_complete: Callable[[int, int, float], None] | None = None,
         child_max_iterations: int | None = None,
         child_system_prompt: str | None = None,
+        subcall_context_limit: int | None = None,
     ):
         """
         Args:
@@ -318,6 +320,11 @@ class RLM:
         self.scheduler_max_concurrent = scheduler_max_concurrent
         self.scheduler_aging_interval = scheduler_aging_interval
         self.scheduler_coordination_dir = scheduler_coordination_dir
+        # Effective sub-model context window (tokens) for the input-size guard.
+        # None = guard off. Threaded by the Harness (resolved once); follows the
+        # recursion (children inherit) and arms both the LocalREPL llm_query guard
+        # and the _subcall rlm_query guard, plus the prompt's chunk-budget wording.
+        self.subcall_context_limit = subcall_context_limit
 
         self.depth = depth
         self.max_depth = max_depth
@@ -452,6 +459,11 @@ class RLM:
             if self.compaction and self.environment_type == "local":
                 env_kwargs["compaction"] = True
             env_kwargs["max_concurrent_subcalls"] = self.max_concurrent_subcalls
+            # Arm the LocalREPL input-size guard on llm_query / llm_query_batched.
+            # The REPL needs BOTH the limit and the model name (for count_tokens).
+            if self.subcall_context_limit is not None:
+                env_kwargs["subcall_context_limit"] = self.subcall_context_limit
+                env_kwargs["model_name"] = (self.backend_kwargs or {}).get("model_name")
             environment: BaseEnv = get_environment(self.environment_type, env_kwargs)
 
             if self.persistent:
@@ -475,10 +487,18 @@ class RLM:
         up the initial message history.
         """
         metadata = QueryMetadata(prompt)
+        # When a sub-call context limit is set, advertise the matching safe
+        # per-chunk char budget in the prompt so the model chunks to fit; else
+        # build_rlm_system_prompt uses its conservative default.
+        subcall_char_budget = None
+        if self.subcall_context_limit is not None:
+            model_name = (self.backend_kwargs or {}).get("model_name", "") or ""
+            subcall_char_budget = safe_chunk_chars(self.subcall_context_limit, model_name)
         message_history = build_rlm_system_prompt(
             system_prompt=self.system_prompt,
             query_metadata=metadata,
             custom_tools=self.custom_tools,
+            subcall_char_budget=subcall_char_budget,
         )
         if self.compaction:
             message_history[0]["content"] += (
@@ -1021,6 +1041,26 @@ class RLM:
             child_backend_kwargs = self.backend_kwargs
         resolved_model = model or (child_backend_kwargs or {}).get("model_name", "unknown")
 
+        # Input-size guard (deterministic, arithmetic): reject an oversized
+        # rlm_query prompt before any send - covering both the leaf-fallback LM
+        # call and the child RLM's first prompt. Returns the actionable
+        # chunk-and-map-reduce hint as the call result (same shape as the
+        # verifier-rejection completion below: zero usage / time).
+        if self.subcall_context_limit is not None:
+            hint = oversize_rejection(
+                prompt if isinstance(prompt, str) else str(prompt),
+                limit=self.subcall_context_limit,
+                model=resolved_model if isinstance(resolved_model, str) else "",
+            )
+            if hint is not None:
+                return RLMChatCompletion(
+                    root_model=resolved_model,
+                    prompt=prompt,
+                    response=hint,
+                    usage_summary=UsageSummary(model_usage_summaries={}),
+                    execution_time=0.0,
+                )
+
         # Strategy review before paying for anything - including the leaf
         # fallback below: a whole-task delegation is wasteful at every depth.
         if self.subcall_verifier is not None:
@@ -1187,6 +1227,9 @@ class RLM:
             on_subcall_complete=self.on_subcall_complete,
             on_iteration_start=self.on_iteration_start,
             on_iteration_complete=self.on_iteration_complete,
+            # The input-size guard must follow the recursion: a child whose
+            # sub-calls are unguarded re-opens the overflow surface.
+            subcall_context_limit=self.subcall_context_limit,
         )
         try:
             result = child.completion(prompt, root_prompt=None)

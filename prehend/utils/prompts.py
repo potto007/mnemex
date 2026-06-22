@@ -9,7 +9,7 @@ RLM_SYSTEM_PROMPT = textwrap.dedent(
 
 The REPL environment is initialized with:
 1. A `context` variable that contains extremely important information about your query. You should check the content of the `context` variable to understand what you are working with. Make sure you look through it sufficiently as you answer your query.
-2. A `llm_query(prompt, model=None)` function that makes a single LLM completion call (no REPL, no iteration). Fast and lightweight -- use this for simple extraction, summarization, or Q&A over a chunk of text. The sub-LLM can handle around 500K chars.
+2. A `llm_query(prompt, model=None)` function that makes a single LLM completion call (no REPL, no iteration). Fast and lightweight -- use this for SHORT text/extraction: pulling a fact, summarizing or answering over a SMALL chunk. Do NOT pass large chunks of context to `llm_query`. For large context, split it into chunks of <= ~{subcall_char_budget} characters each and map-reduce them via `rlm_query_batched` -- a single sub-call larger than the sub-model's window will be rejected.
 3. A `llm_query_batched(prompts, model=None)` function that runs multiple `llm_query` calls concurrently: returns `List[str]` in the same order as input prompts. Much faster than sequential `llm_query` calls for independent queries.
 4. A `rlm_query(prompt, model=None)` function that spawns a **recursive RLM sub-call** for deeper thinking subtasks. The child gets its own REPL environment and can reason iteratively over the prompt, just like you. Use this when a subtask requires multi-step reasoning, code execution, or its own iterative problem-solving -- not just a simple one-shot answer. Falls back to `llm_query` if recursion is not available.
 5. A `rlm_query_batched(prompts, model=None)` function that spawns multiple recursive RLM sub-calls. Each prompt gets its own child RLM. Falls back to `llm_query_batched` if recursion is not available.
@@ -17,6 +17,8 @@ The REPL environment is initialized with:
 7. The ability to use `print()` statements to view the output of your REPL code and continue your reasoning.
 8. An `answer` dict (`{{"content": "", "ready": False}}`) that you use to submit your final answer. See "Submitting your final answer" below.
 {custom_tools_section}
+
+**CRITICAL - sub-calls do NOT see your `context`:** every sub-call (`llm_query`, `llm_query_batched`, `rlm_query`, `rlm_query_batched`) runs in a SEPARATE environment with NO access to your `context` variable. You MUST paste the relevant slice of context text directly into the prompt string you pass, e.g. `rlm_query(f"Which items does Dave own? Text:\\n{{context[:80000]}}")`. A bare instruction with no context slice (e.g. `rlm_query("find what Dave owns")`) gives the child nothing to read and it will answer "no information found". So DO pass context into sub-calls - just pass a SLICE (a chunk), never the whole thing at once: keep each slice under ~{subcall_char_budget} characters and, when the context is larger, split it into several chunks and map-reduce them.
 
 **When to use `llm_query` vs `rlm_query`:**
 - Use `llm_query` for simple, one-shot tasks: extracting info from a chunk, summarizing text, answering a factual question, classifying content. These are fast single LLM calls.
@@ -38,7 +40,7 @@ summary = llm_query(f"An electron entered a B field and underwent helical motion
 You will only be able to see truncated outputs from the REPL environment, so you should use the query LLM function on variables you want to analyze. You will find this function especially useful when you have to analyze the semantics of the context. Use these variables as buffers to build up your final answer.
 Make sure to explicitly look through the entire context in REPL before answering your query. Break the context and the problem into digestible pieces: e.g. figure out a chunking strategy, break up the context into smart chunks, query an LLM per chunk and save answers to a buffer, then query an LLM over the buffers to produce your final answer.
 
-You can use the REPL environment to help you understand your context, especially if it is huge. Remember that your sub LLMs are powerful -- they can fit around 500K characters in their context window, so don't be afraid to put a lot of context into them. For example, a viable strategy is to feed 10 documents per sub-LLM query. Analyze your input data and see if it is sufficient to just fit it in a few sub-LLM calls!
+You can use the REPL environment to help you understand your context, especially if it is huge. Your sub-LLMs have a BOUNDED context window: a single sub-call prompt must stay under ~{subcall_char_budget} characters, or it will be rejected with an instruction to chunk. So do NOT dump a lot of context into one `llm_query`. Instead, split the context into chunks of <= ~{subcall_char_budget} characters each and map-reduce them: send one chunk per sub-call via `rlm_query_batched` (or `llm_query_batched` for simple extraction), then combine the per-chunk results. Analyze your input data and pick a chunk count so each chunk fits the budget.
 
 When you want to execute Python code in the REPL environment, wrap it in triple backticks with 'repl' language identifier. For example, say we want our recursive model to search for the magic number in the context (assuming the context is a string), and the context is very long, so we want to chunk it:
 ```repl
@@ -114,10 +116,19 @@ Think step by step carefully, plan, and execute this plan immediately in your re
 )
 
 
+# Conservative default sub-call char budget when no resolved context limit is
+# available (subcall_char_budget=None). ~90K chars is safe for the smallest
+# windows we target (e.g. the v13 router's 98,304-token window): well under
+# safe_chunk_chars(98304, gemma) ~= 250K and tiny enough to never overflow a
+# typical sub-model. Callers with a known limit pass safe_chunk_chars(...).
+DEFAULT_SUBCALL_CHAR_BUDGET = 90_000
+
+
 def build_rlm_system_prompt(
     system_prompt: str,
     query_metadata: QueryMetadata,
     custom_tools: dict[str, Any] | None = None,
+    subcall_char_budget: int | None = None,
 ) -> list[dict[str, str]]:
     """
     Build the initial system prompt for the REPL environment based on extra prompt metadata.
@@ -126,6 +137,10 @@ def build_rlm_system_prompt(
         system_prompt: The base system prompt template.
         query_metadata: QueryMetadata object containing context metadata.
         custom_tools: Optional dict of custom tools to include in the prompt.
+        subcall_char_budget: Max characters one sub-call prompt may carry, filled
+            into the prompt's {subcall_char_budget} capacity field (thousands-
+            separated). None -> DEFAULT_SUBCALL_CHAR_BUDGET (a conservative safe
+            value). RLM passes safe_chunk_chars(subcall_context_limit, model).
 
     Returns:
         List of message dictionaries
@@ -150,8 +165,13 @@ def build_rlm_system_prompt(
     else:
         custom_tools_section = ""
 
-    # Insert custom tools section into the system prompt
-    final_system_prompt = system_prompt.format(custom_tools_section=custom_tools_section)
+    # Insert custom tools section + sub-call char budget into the system prompt.
+    # Both are .format fields in the template, so they must be supplied together.
+    budget = subcall_char_budget if subcall_char_budget is not None else DEFAULT_SUBCALL_CHAR_BUDGET
+    final_system_prompt = system_prompt.format(
+        custom_tools_section=custom_tools_section,
+        subcall_char_budget=f"{budget:,}",
+    )
 
     metadata_prompt = f"Your context is a {context_type} with {context_total_length} total characters, and is broken up into chunks of char lengths: {context_lengths}."
 

@@ -5,13 +5,27 @@ Uses tiktoken for OpenAI-style models when available; otherwise estimates
 with ~4 characters per token.
 """
 
+import math
 from typing import Any
 
 # Default context limit when model is unknown (tokens)
 DEFAULT_CONTEXT_LIMIT = 128_000
 
-# Characters per token when tokenizer is unavailable (conservative estimate)
+# Characters per token when tokenizer is unavailable (rough average).
 CHARS_PER_TOKEN_ESTIMATE = 4
+
+# Conservative chars-per-token for the non-tiktoken fallback path.
+# Real (non-OpenAI) models like gemma tokenize DENSER than tiktoken's cl100k for
+# structured/code text, so the cl100k fallback (and a 4.0 char/token average)
+# can UNDERESTIMATE. An undercount would let an oversized prompt slip past an
+# input-size guard. Using ~3.0 chars/token biases the fallback toward
+# OVER-counting (more tokens), which is the safe direction for a guard.
+CONSERVATIVE_CHARS_PER_TOKEN = 3.0
+
+# Substrings that mark a model as clearly NOT OpenAI/tiktoken-compatible.
+# For these we prefer the conservative char-based estimate over cl100k, which
+# would undercount their denser tokenizers.
+_NON_OPENAI_MODEL_MARKERS = ("gemma", "gemini", "qwen", "kimi", "glm", "llama", "mistral")
 
 # Model context limits (max input context in tokens).
 # Match: key contained in model_name (e.g. "gpt-4o" matches "@openai/gpt-4o").
@@ -64,6 +78,12 @@ MODEL_CONTEXT_LIMITS: dict[str, int] = {
     "glm-4-9b": 1_000_000,
     "glm-4": 128_000,
     "glm": 128_000,
+    # Gemma (Google) - true trained window (262144). Fixes the silent 128000
+    # default for e.g. gemma-4-12b-it-sft-kb-v13-sft. "gemma-4" is longer than
+    # "gemma" so longest-key-wins picks it for gemma-4 variants; both map to the
+    # same honest model property.
+    "gemma-4": 262_144,
+    "gemma": 262_144,
 }
 
 
@@ -122,22 +142,56 @@ def _count_tokens_tiktoken(messages: list[dict[str, Any]], model_name: str) -> i
     return total
 
 
+def _is_non_openai_model(model_name: str) -> bool:
+    """True for models whose tokenizer is denser than cl100k (gemma, etc.)."""
+    lowered = model_name.lower()
+    return any(marker in lowered for marker in _NON_OPENAI_MODEL_MARKERS)
+
+
 def count_tokens(messages: list[dict[str, Any]], model_name: str) -> int:
     """
     Count tokens in a list of message dicts (role, content).
 
-    Uses tiktoken for OpenAI-style models when the package is available;
-    otherwise estimates with character length / CHARS_PER_TOKEN_ESTIMATE.
+    Uses tiktoken for OpenAI-style models when the package is available.
+    For clearly-non-OpenAI models (gemma, gemini, qwen, ...) we deliberately
+    DO NOT use the cl100k fallback: those tokenizers are denser, so cl100k (and
+    a 4.0 char/token average) UNDERCOUNT them, which would let oversized prompts
+    slip past an input-size guard. Instead we use a CONSERVATIVE char-based
+    estimate (CONSERVATIVE_CHARS_PER_TOKEN ~3.0) that biases toward
+    over-counting. tiktoken behavior for real OpenAI models is unchanged.
     """
     if not messages:
         return 0
-    if model_name and model_name != "unknown":
+    use_conservative = _is_non_openai_model(model_name)
+    if model_name and model_name != "unknown" and not use_conservative:
         n = _count_tokens_tiktoken(messages, model_name)
         if n is not None:
             return n
-    # Fallback: count chars (stringify in case content is not str, e.g. list)
+    # Char-based estimate (stringify in case content is not str, e.g. list).
     total_chars = 0
     for m in messages:
         raw = m.get("content", "") or ""
         total_chars += len(raw) if isinstance(raw, str) else len(str(raw))
+    if use_conservative:
+        # Conservative: fewer chars per token => more tokens => over-estimate.
+        return math.ceil(total_chars / CONSERVATIVE_CHARS_PER_TOKEN)
     return (total_chars + CHARS_PER_TOKEN_ESTIMATE - 1) // CHARS_PER_TOKEN_ESTIMATE
+
+
+def resolve_subcall_limit(
+    model: str,
+    *,
+    explicit: int | None = None,
+    runtime_ctx: int | None = None,
+) -> int:
+    """
+    Resolve the effective sub-call context limit (in tokens).
+
+    Returns the first non-None of (explicit, runtime_ctx, get_context_limit(model)).
+    Pure and never raises.
+    """
+    if explicit is not None:
+        return explicit
+    if runtime_ctx is not None:
+        return runtime_ctx
+    return get_context_limit(model)

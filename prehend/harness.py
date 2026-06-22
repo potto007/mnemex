@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 from prehend.core.srlm import SRLM
 from prehend.core.types import RLMChatCompletion
 from prehend.utils.prompts import RLM_SYSTEM_PROMPT
+from prehend.utils.token_utils import resolve_subcall_limit
 
 if TYPE_CHECKING:
     from prehend.memory.harness import MemoryObserver
@@ -32,6 +33,10 @@ class Defaults:
     subcall_enable_thinking: bool = False
     max_concurrent_subcalls: int = 4
     soft_timeout_pct: float | None = None
+    # Sub-model context window (tokens) for the input-size guard. None lets the
+    # Harness resolve it from runtime.ctx, then get_context_limit(model). A
+    # Harness(subcall_context_limit=...) param overrides this field. Tier-A.
+    subcall_context_limit: int | None = None
 
 
 VETTED = Defaults()
@@ -125,6 +130,7 @@ class Harness:
         runtime: "Runtime | str" = "auto",
         defaults: Defaults | None = None,
         system_addendum: str | None = None,
+        subcall_context_limit: int | None = None,
         subcall_verifier=None,
         answer_verifier=None,
         max_answer_retries: int | None = None,
@@ -143,6 +149,19 @@ class Harness:
         d = defaults or VETTED
         self.runtime = self._resolve_runtime(runtime, base_url, api_key, d)
 
+        # Resolve the effective sub-call context limit once (param > Defaults
+        # field > runtime.ctx > get_context_limit(model)). Threaded into the
+        # SRLM/RLM (guard + prompt) and the LocalREPL (llm_query guard). No env
+        # var in core - Tier-B is explicit args (harness-api-design "no env hack").
+        explicit_limit = (
+            subcall_context_limit
+            if subcall_context_limit is not None
+            else d.subcall_context_limit
+        )
+        eff_subcall_limit = resolve_subcall_limit(
+            model, explicit=explicit_limit, runtime_ctx=self.runtime.ctx
+        )
+
         backend_kwargs = {
             "model_name": model, "base_url": base_url, "api_key": api_key,
             "max_retries": d.max_retries, "stream": d.stream,
@@ -157,7 +176,12 @@ class Harness:
             other_backends=["openai"],
             other_backend_kwargs=[subcall_kwargs],
             environment="local",
-            environment_kwargs={"max_output_chars": d.max_output_chars},
+            environment_kwargs={
+                "max_output_chars": d.max_output_chars,
+                "subcall_context_limit": eff_subcall_limit,
+                "model_name": model,
+            },
+            subcall_context_limit=eff_subcall_limit,
             max_iterations=d.max_iterations,
             max_depth=d.max_depth,
             max_errors=d.max_errors,

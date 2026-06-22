@@ -20,5 +20,7 @@ lives in [rlm-trainer `docs/decisions/README.md`](https://github.com/ClearBridge
 | [0005](0005-mnemex-experience-memory-layer.md) | Adopt FinAcumen's FM as lm-repl's experience-memory layer (mnemex) | accepted |
 | [0006](0006-rename-lm-repl-to-mnemex.md) | Full rename `lm-repl` -> `mnemex` (package, PyPI, repo) | superseded by [0007](0007-rename-mnemex-to-prehend.md) |
 | [0007](0007-rename-mnemex-to-prehend.md) | Full rename `mnemex` -> `prehend` (package, PyPI, repo) | accepted |
+| [0008](0008-high-level-harness-api.md) | High-level `Harness` API (Tier A/B/C; runtime detection) | accepted |
+| [0009](0009-subcall-input-context-guard.md) | Sub-call input-size context guard (reject-with-hint; 1st input-axis guard) | accepted |
 
 `0000-template.md` is the MADR template for new records.
