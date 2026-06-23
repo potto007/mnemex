@@ -141,11 +141,11 @@ def test_from_config_routes_embed_to_separate_endpoint(monkeypatch, tmp_path):
         FakeSolver(), tmp_path / "mem",
         base_url="http://localhost:8080/v1",
         embed_model="bge-m3", reflect_model="gemma",
-        embed_base_url="http://localhost:8081/v1",
+        embed_base_url="http://localhost:8084/v1",
         embed_api_key="embed-key",
     )
     assert isinstance(harness, MemoryHarness)
-    assert seen["embed"]["base_url"] == "http://localhost:8081/v1"
+    assert seen["embed"]["base_url"] == "http://localhost:8084/v1"
     assert seen["embed"]["model"] == "bge-m3"
     assert seen["embed"]["api_key"] == "embed-key"
     assert seen["reflect"]["base_url"] == "http://localhost:8080/v1"
@@ -196,7 +196,7 @@ def test_from_config_routes_reflect_to_separate_endpoint(monkeypatch, tmp_path):
         FakeSolver(), tmp_path / "mem",
         base_url="http://localhost:8080/v1",
         embed_model="bge-m3", reflect_model="gemma-4-e4b",
-        embed_base_url="http://localhost:8081/v1",
+        embed_base_url="http://localhost:8084/v1",
         reflect_base_url="http://localhost:8082/v1",
         reflect_api_key="reflect-key",
     )
@@ -204,7 +204,7 @@ def test_from_config_routes_reflect_to_separate_endpoint(monkeypatch, tmp_path):
     assert seen["reflect"]["model"] == "gemma-4-e4b"
     assert seen["reflect"]["api_key"] == "reflect-key"
     # embed and reflect endpoints are independent of each other and of base_url.
-    assert seen["embed"]["base_url"] == "http://localhost:8081/v1"
+    assert seen["embed"]["base_url"] == "http://localhost:8084/v1"
 
 
 def test_from_config_reflect_endpoint_defaults_to_base_url(monkeypatch, tmp_path):

@@ -109,7 +109,7 @@ def build_memory_harness_from_config(
     Reflect (trace distillation) runs against ``reflect_base_url`` when given,
     else ``base_url``; embedding against ``embed_base_url`` else ``base_url``.
     Both can be split off the solver endpoint - the common local setup where a
-    small embedding model (e.g. bge-m3 on :8081) and a small/neutral distill
+    small embedding model (e.g. bge-m3 on :8084) and a small/neutral distill
     model (e.g. Gemma 4 e4b on :8082) run on their own ports while the solver
     model is swapped on the single-model router (:8080), which must not swap.
 

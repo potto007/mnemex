@@ -166,7 +166,7 @@ class TestHarnessMemory:
         h = _h(memory=MemoryConfig(
             bank_dir=str(tmp_path / "bank"),
             embed_model="bge-m3", reflect_model="m",
-            embed_url="http://localhost:8081/v1",
+            embed_url="http://localhost:8084/v1",
         ))
         assert isinstance(h.solver, MemoryHarness)
         assert h.solver is not h.srlm
@@ -180,7 +180,7 @@ class TestHarnessMemory:
         h = _h(memory=MemoryConfig(
             bank_dir=str(tmp_path / "bank"),
             embed_model="bge-m3", reflect_model="m",
-            embed_url="http://localhost:8081/v1",
+            embed_url="http://localhost:8084/v1",
             observer=sentinel,
         ))
         assert h.solver.observer is sentinel
@@ -191,7 +191,7 @@ class TestHarnessMemory:
         h = _h(memory=MemoryConfig(
             bank_dir=str(tmp_path / "bank"),
             embed_model="bge-m3", reflect_model="m",
-            embed_url="http://localhost:8081/v1",
+            embed_url="http://localhost:8084/v1",
         ))
         from prehend.memory.harness import NullObserver
         assert isinstance(h.solver.observer, NullObserver)

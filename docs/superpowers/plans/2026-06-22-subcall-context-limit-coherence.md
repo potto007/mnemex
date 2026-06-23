@@ -39,7 +39,7 @@ realigns. New ADR-0009 required (first INPUT-axis guard; companions ADR-0002/000
   -> None -> runtime.ctx unavailable. EFFECTIVE limit must come from the explicit param
   (driver passes 98304) or get_context_limit fallback. The /v1/models meta DID report
   n_ctx=98304 (probe could be improved to read it; nice-to-have).
-- bge-m3 :8081, e4b distiller :8083 up. Eval driver: rlm-trainer scripts/memory_cold_warm.py
+- bge-m3 :8084, e4b distiller :8083 up. Eval driver: rlm-trainer scripts/memory_cold_warm.py
   -> benchmark.run_benchmark. rlm-trainer .venv is runtime; prehend editable-installed.
 - Durable run state ~/eval-runs/mem-v13-plain-multihop-e4b/ (cold 15/15; bank had bad entry
   exp_840d65c8 advising single-shot whole-context -> purge/regenerate).
