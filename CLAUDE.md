@@ -50,6 +50,8 @@ Canonical issue tracker: **GitHub Issues & Milestones** at `ClearBridgeRIP/rlm-t
 
 **Important**: NEVER ever mention a co-authored-by or similar aspects. In particular, never mention the tool used to create the commit message or PR.
 
+Commit early, commit often.
+
 For commits related to a Github issue, add: `git commit --trailer "Github-Issue:#<number>"` where <number> is the Github Issue number.
 
 When adding tags, if not given an explicit tag name or version, use `git tag --sort=-v:refname` with the Read tool (NOT piped through head) to determine most recent version. NEVER refer to packages/shared/src/version.ts or packages/mobile/app.json for version lookups.
