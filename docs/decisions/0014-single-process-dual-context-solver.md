@@ -81,7 +81,11 @@ backend sets `enable_thinking=false`), not a server-level difference.
   cache (no reimplementation); works on WSL2.
 - Bad / risks: (1) a custom binary tracks llama.cpp server internals
   (`server_context`, `server-http`) which are not a stable public API - upstream
-  bumps may need rework; the shared-model refactor lives in our fork. (2) Model
+  bumps may need rework; the shared-model refactor lives in our fork.
+  Specifically, the OpenAI route table in `rlm-dual-server.cpp` is copied
+  verbatim from `server.cpp`'s `llama_server()` (and the file-static
+  `ex_wrapper`), so upstream route additions must be mirrored by hand - a
+  known drift point flagged at build time. (2) Model
   lifetime: the borrowed model must outlive both contexts and be freed exactly
   once by `main`, not by either `server_context`. (3) VRAM sizing is empirical:
   at orchestrator ctx 98304, orchestrator KV + worker KV + one weights copy must
