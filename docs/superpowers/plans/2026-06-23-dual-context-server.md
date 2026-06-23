@@ -48,11 +48,11 @@
 
 (If `llama-server` already builds a reusable lib, skip this task and link it directly in Task 3.)
 
-## Task 3: New target `examples/dual-context-server/`
+## Task 3: New target `tools/dual-context-server/`
 
 **Files (fork):**
-- Create: `examples/dual-context-server/CMakeLists.txt` (target `llama-dual-context-server`, link the server core lib + llama + cpp-httplib), modeled on `examples/diffusion-gemma-server/CMakeLists.txt`
-- Create: `examples/dual-context-server/dual-context-server.cpp`
+- Create: `tools/dual-context-server/CMakeLists.txt` (target `llama-dual-context-server`, link the server core lib + llama + cpp-httplib), modeled on `examples/diffusion-gemma-server/CMakeLists.txt`
+- Create: `tools/dual-context-server/dual-context-server.cpp`
 - Modify: `examples/CMakeLists.txt` if it must register the subdir
 
 **Interfaces:**
