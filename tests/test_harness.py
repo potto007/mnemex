@@ -100,6 +100,33 @@ class TestHarnessCore:
         assert h.subcall_runtime.slots == VETTED.max_concurrent_subcalls
         assert h.srlm.max_concurrent_subcalls == VETTED.max_concurrent_subcalls
 
+    def test_direct_completion_uses_orchestrator_not_worker(self, monkeypatch):
+        # Direct mode (short context bypasses the REPL) is a top-level solve, so
+        # it must hit the orchestrator (CoT-on master), NOT the sub-call worker
+        # (CoT-off). Under dual-instance these are different servers.
+        import prehend.core.srlm as srlm_mod
+        captured = {}
+
+        class FakeClient:
+            def completion(self, messages):
+                return "answer"
+
+            def get_usage_summary(self):
+                return {}
+
+        def fake_get_client(backend, kw):
+            captured["base_url"] = (kw or {}).get("base_url")
+            return FakeClient()
+
+        monkeypatch.setattr(srlm_mod, "get_client", fake_get_client)
+        h = Harness(model="m", base_url="http://localhost:8080/v1",
+                    subcall_base_url="http://localhost:8081/v1",
+                    runtime=Runtime(slots=1, ctx=32768),
+                    subcall_runtime=Runtime(slots=4, ctx=65536),
+                    direct_threshold=10_000)
+        h.srlm.completion("short context")  # len < 10000 -> direct mode
+        assert captured["base_url"] == "http://localhost:8080/v1"
+
     def test_auto_runtime_falls_back_when_probe_ambiguous(self):
         h = Harness(model="m", base_url="http://localhost:9999/v1",
                     runtime="auto",
