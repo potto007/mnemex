@@ -15,6 +15,7 @@ from prehend.clients.base_lm import BaseLM
 from prehend.clients.coordination import CrossProcessGate
 from prehend.clients.scheduler import RequestScheduler
 from prehend.core.comms_utils import LMRequest, LMResponse, socket_recv, socket_send
+from prehend.utils.exceptions import CancellationError, TimeoutExceededError
 from prehend.core.types import RLMChatCompletion, UsageSummary
 from prehend.core.verifier import REJECTION_PREFIX, SubcallReview, SubcallVerifier
 
@@ -141,17 +142,32 @@ class LMRequestHandler(StreamRequestHandler):
             # The client's RequestScheduler already bounds concurrency (and adds priority
             # ordering), so a semaphore on top would only fight its queue.
             async def run_one(prompt: str):
-                return await client.acompletion(
-                    prompt, priority=request.priority, **subcall_kwargs
-                )
+                return await _run_one_guarded(prompt)
         else:
             sem = asyncio.Semaphore(handler.batch_max_concurrent)
 
             async def run_one(prompt: str):
                 async with sem:
-                    return await client.acompletion(
-                        prompt, priority=request.priority, **subcall_kwargs
-                    )
+                    return await _run_one_guarded(prompt)
+
+        async def _run_one_guarded(prompt: str):
+            # Per-prompt error isolation. A single sub-call failure (e.g. an
+            # oversized chunk that 400s) must NOT poison its batch siblings:
+            # gather() without return_exceptions would propagate the first error
+            # and tear down the event loop, turning every in-flight sibling into
+            # an APIConnectionError ("Connection error.") - the 2026-06-24
+            # multihop epic-fail. Convert a failed call to an "Error:" string
+            # (which map_reduce's _is_control already filters out of the reduce)
+            # so good chunks still return answers. Control-flow exceptions
+            # (run cancelled / deadline) must still propagate to abort the run.
+            try:
+                return await client.acompletion(
+                    prompt, priority=request.priority, **subcall_kwargs
+                )
+            except (CancellationError, TimeoutExceededError):
+                raise
+            except Exception as e:
+                return f"Error: {e}"
 
         async def run_all():
             tasks = [run_one(prompt) for prompt in to_run]
