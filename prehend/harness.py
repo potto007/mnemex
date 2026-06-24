@@ -37,6 +37,12 @@ class Defaults:
     # Harness resolve it from runtime.ctx, then get_context_limit(model). A
     # Harness(subcall_context_limit=...) param overrides this field. Tier-A.
     subcall_context_limit: int | None = None
+    # Dynamic-KV-pool engine (sglang, ADR-0015): when True the per-slot sub-call
+    # division (per_call_subcall_budget) is bypassed - sglang's paged radix pool
+    # LRU-evicts under contention instead of 500ing the way llama.cpp --kv-unified
+    # did (ADR-0012), so each sub-call is budgeted against the FULL resolved pool
+    # (the per-request context-length cap). Default False keeps the llama.cpp path.
+    dynamic_kv_pool: bool = False
 
 
 VETTED = Defaults()
@@ -145,6 +151,7 @@ class Harness:
         defaults: Defaults | None = None,
         system_addendum: str | None = None,
         subcall_context_limit: int | None = None,
+        dynamic_kv_pool: bool | None = None,
         subcall_verifier=None,
         answer_verifier=None,
         max_answer_retries: int | None = None,
@@ -201,7 +208,17 @@ class Harness:
         shared_pool = resolve_subcall_limit(
             model, explicit=explicit_limit, runtime_ctx=self.subcall_runtime.ctx
         )
-        eff_subcall_limit = per_call_subcall_budget(shared_pool, self.subcall_runtime.slots)
+        # Dynamic-pool engines (sglang) skip the per-slot division: their paged KV
+        # pool evicts under contention rather than 500ing, so each sub-call gets
+        # the full resolved pool (the per-request context-length cap). The
+        # llama.cpp --kv-unified path keeps pool // slots (ADR-0012). Param >
+        # Defaults field.
+        use_dynamic = dynamic_kv_pool if dynamic_kv_pool is not None else d.dynamic_kv_pool
+        eff_subcall_limit = (
+            shared_pool
+            if use_dynamic
+            else per_call_subcall_budget(shared_pool, self.subcall_runtime.slots)
+        )
 
         backend_kwargs = {
             "model_name": model, "base_url": base_url, "api_key": api_key,
