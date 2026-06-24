@@ -47,6 +47,28 @@ _MAP_SENTINEL_DIRECTIVE = (
     "else ONLY if the text states no such fact about any entity in the request."
 )
 
+# Query-INDEPENDENT extraction instruction for the MAP step in extraction_map
+# mode (multihop CHAINING fix). The legacy per-query map uses the user query as
+# the per-chunk instruction, so the model judges a background hop (e.g. "Alice
+# moved to Chicago", which does not itself answer "what does Alice own?") as
+# irrelevant and drops it - the Alice->Chicago->key chain is never connected
+# (diagnosed multihop_053; re-tuning _MAP_SENTINEL_DIRECTIVE failed twice).
+# Asking instead for EVERY fact about EVERY named entity removes the query as a
+# filter, so all hops survive to the global reduce, where the user query (the
+# reduce_prompt) does the actual chaining. Carries the sentinel clause itself so
+# entity-free filler chunks still drop out and cannot dilute the reduce. Trails
+# the chunk (data-first, ADR-0017) so the cacheable chunk prefix is undisturbed.
+_EXTRACTION_MAP_INSTRUCTION = (
+    "Extract, do not answer. List every fact the text above states about any "
+    "named person, place, organization, or thing - one fact per line, quoting "
+    "each name exactly. Include relationships (who lives or moves where, who owns "
+    "or has what, who works for or knows whom) and attributes, even ones that "
+    "seem like unimportant background; a later step needs them to connect facts "
+    "across the document. Do not summarize or judge relevance. Reply with exactly "
+    f"{_NO_INFO_SENTINEL} and nothing else ONLY if the text states no fact about "
+    "any named entity."
+)
+
 # Clean answer surfaced when EVERY chunk returned the sentinel (truly nothing
 # found anywhere), so the raw token never leaks to the caller.
 _NO_INFO_ANSWER = "No relevant information was found in the provided text."
@@ -137,6 +159,7 @@ def map_reduce(
     overlap_chars: int = 0,
     is_control: Callable[[str], bool] = _is_control,
     compose: Callable[[str, str, str], str] = _compose,
+    extraction_map: bool = False,
 ) -> MapReduceResult:
     """Map ``prompt`` over chunks of ``context`` and tree-reduce the partials.
 
@@ -152,6 +175,11 @@ def map_reduce(
         max_reduce_depth: tree depth bound; the unconditional termination backstop.
         is_control: predicate marking a response as a control/error string to drop.
         compose: instruction+data framing.
+        extraction_map: if True, the MAP step uses a query-INDEPENDENT fact
+            extraction instruction instead of ``prompt`` (so cross-document hops
+            survive instead of being filtered as irrelevant to the query); the
+            query (``reduce_prompt``, defaulting to ``prompt``) then chains the
+            extracted facts at the REDUCE. The multihop CHAINING lever.
     """
     if reduce_prompt is None:
         reduce_prompt = prompt
@@ -183,12 +211,14 @@ def map_reduce(
                 real.append(r)
         return real
 
-    # 2. Map: run the instruction over each chunk in one batch. The MAP
-    #    instruction carries the no-info sentinel directive (the REDUCE prompt
-    #    below does not) so a chunk with no related fact returns a droppable
-    #    sentinel instead of a verbose "no information" answer that would dilute
-    #    the reduce.
-    map_instr = prompt + _MAP_SENTINEL_DIRECTIVE
+    # 2. Map: run the instruction over each chunk in one batch. In extraction_map
+    #    mode the MAP is query-INDEPENDENT (extract every fact about every named
+    #    entity) so cross-document hops survive to the reduce; otherwise it is the
+    #    legacy per-query map. Either way the MAP carries the no-info sentinel
+    #    clause (the REDUCE prompt does not) so an entity-free chunk returns a
+    #    droppable sentinel instead of a verbose "no information" answer that would
+    #    dilute the reduce.
+    map_instr = _EXTRACTION_MAP_INSTRUCTION if extraction_map else prompt + _MAP_SENTINEL_DIRECTIVE
     map_raw = run_batch([compose(map_instr, c, "Text") for c in chunks])
     partials = _filter(map_raw)
 

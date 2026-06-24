@@ -8,6 +8,7 @@ See docs/superpowers/specs/2026-06-22-auto-chunk-enforcement-design.md (source o
 import math
 
 from prehend.utils.mapreduce import (
+    _EXTRACTION_MAP_INSTRUCTION,
     _MAP_SENTINEL_DIRECTIVE,
     _NO_INFO_SENTINEL,
     MapReduceResult,
@@ -372,5 +373,101 @@ class TestNoInfoSentinel:
         ctx = "A" * 1000 + "B" * 1000 + "C" * 1000
         res = map_reduce("What does Alice own?", ctx, run_batch=rb,
                          fits=_len_fits(10_000), chunk_chars=1000)
+        assert _NO_INFO_SENTINEL not in res.answer
+        assert "no relevant information" in res.answer.lower()
+
+
+class TestExtractionMap:
+    """Extraction-map mode (multihop CHAINING fix). The legacy per-query MAP uses
+    the user query as the per-chunk instruction, so the model judges a background
+    hop ("Alice moved to Chicago") irrelevant to "what does Alice own?" and drops
+    it - the Alice->Chicago->key chain is never connected (diagnosed multihop_053).
+    Extraction mode makes the MAP query-INDEPENDENT (extract every fact about every
+    named entity) so all hops survive to a global REDUCE, where the user query
+    drives the actual chaining."""
+
+    def test_extraction_map_uses_query_independent_map_instruction(self):
+        # The per-chunk MAP must NOT contain the user query (so the model has no
+        # basis to filter a background hop), and MUST carry the fixed extraction
+        # instruction instead.
+        rb = RecordingBatch(lambda prompts: (
+            [_NO_INFO_SENTINEL] * len(prompts) if len(prompts) > 1 else ["FINAL"]
+        ))
+        ctx = "A" * 1000 + "B" * 1000 + "C" * 1000
+        map_reduce("WHAT_DOES_ALICE_OWN_UNIQUEQ", ctx, run_batch=rb,
+                   fits=_len_fits(10_000), chunk_chars=1000, extraction_map=True)
+        map_prompts = rb.calls[0]
+        assert all(_EXTRACTION_MAP_INSTRUCTION in p for p in map_prompts)
+        assert all("WHAT_DOES_ALICE_OWN_UNIQUEQ" not in p for p in map_prompts)
+        # The legacy per-query sentinel directive must NOT be used in this mode.
+        assert all(_MAP_SENTINEL_DIRECTIVE not in p for p in map_prompts)
+
+    def test_extraction_map_applies_user_query_at_reduce(self):
+        # The user query drives the REDUCE, where the extracted facts are chained
+        # into an answer.
+        def responder(prompts):
+            if _EXTRACTION_MAP_INSTRUCTION in prompts[0]:
+                return ["fact A", "fact B", "fact C"]
+            return ["CHAINED"]
+        rb = RecordingBatch(responder)
+        ctx = "A" * 1000 + "B" * 1000 + "C" * 1000
+        map_reduce("WHAT_DOES_ALICE_OWN_UNIQUEQ", ctx, run_batch=rb,
+                   fits=_len_fits(100_000), chunk_chars=1000, extraction_map=True)
+        reduce_input = "\n".join(rb.calls[1])
+        assert "WHAT_DOES_ALICE_OWN_UNIQUEQ" in reduce_input
+
+    def test_extraction_map_off_by_default_keeps_per_query_map(self):
+        # Backward-compat: without the flag the legacy per-query map (query +
+        # sentinel directive) is unchanged.
+        rb = RecordingBatch(lambda prompts: (
+            [_NO_INFO_SENTINEL] * len(prompts) if len(prompts) > 1 else ["FINAL"]
+        ))
+        ctx = "A" * 1000 + "B" * 1000 + "C" * 1000
+        map_reduce("WHAT_DOES_ALICE_OWN_UNIQUEQ", ctx, run_batch=rb,
+                   fits=_len_fits(10_000), chunk_chars=1000)
+        map_prompts = rb.calls[0]
+        assert all("WHAT_DOES_ALICE_OWN_UNIQUEQ" in p for p in map_prompts)
+        assert all(_MAP_SENTINEL_DIRECTIVE in p for p in map_prompts)
+        assert all(_EXTRACTION_MAP_INSTRUCTION not in p for p in map_prompts)
+
+    def test_extraction_map_preserves_background_hop_and_chains(self):
+        # The headline behavior. Because the MAP is query-independent, the chunk
+        # holding the BACKGROUND hop ("Alice lives in Chicago") extracts it rather
+        # than dropping it as irrelevant to "owns". The REDUCE then chains
+        # Alice->Chicago->golden key. Models the multihop_053 chain.
+        def responder(prompts):
+            if _EXTRACTION_MAP_INSTRUCTION in prompts[0]:  # MAP step
+                out = []
+                for p in prompts:
+                    if "ALICE_CHICAGO" in p:
+                        out.append("Alice lives in Chicago.")
+                    elif "CHICAGO_KEY" in p:
+                        out.append("The person who lives in Chicago owns a golden key.")
+                    else:
+                        out.append(_NO_INFO_SENTINEL)
+                return out
+            return ["Alice owns a golden key."]  # REDUCE chains the two hops
+        rb = RecordingBatch(responder)
+        ctx = ("ALICE_CHICAGO" + "x" * 987
+               + "fillerfiller" + "y" * 988
+               + "CHICAGO_KEY" + "z" * 989)
+        res = map_reduce("What does Alice own?", ctx, run_batch=rb,
+                         fits=_len_fits(100_000), chunk_chars=1000,
+                         extraction_map=True)
+        reduce_input = "\n".join(rb.calls[1])
+        assert "Alice lives in Chicago." in reduce_input
+        assert "The person who lives in Chicago owns a golden key." in reduce_input
+        assert _NO_INFO_SENTINEL not in reduce_input
+        assert res.dropped == 1  # the filler chunk
+        assert res.answer == "Alice owns a golden key."
+
+    def test_extraction_map_all_filler_returns_clean_message(self):
+        # Extraction mode still emits the sentinel for entity-free filler chunks,
+        # so an all-filler context yields the clean 'no info' message.
+        rb = RecordingBatch(lambda prompts: [_NO_INFO_SENTINEL] * len(prompts))
+        ctx = "A" * 1000 + "B" * 1000 + "C" * 1000
+        res = map_reduce("What does Alice own?", ctx, run_batch=rb,
+                         fits=_len_fits(10_000), chunk_chars=1000,
+                         extraction_map=True)
         assert _NO_INFO_SENTINEL not in res.answer
         assert "no relevant information" in res.answer.lower()

@@ -23,8 +23,22 @@ from prehend.environments.base_env import (
     extract_tool_value,
     validate_custom_tools,
 )
-from prehend.utils.mapreduce import _compose, map_reduce
+from prehend.utils.mapreduce import (
+    _EXTRACTION_MAP_INSTRUCTION,
+    _MAP_SENTINEL_DIRECTIVE,
+    _compose,
+    map_reduce,
+)
 from prehend.utils.subcall_guard import oversize_rejection, recommended_chunk_chars
+
+# Drive the map-reduce seam with the query-INDEPENDENT extraction MAP (ADR-0018).
+# The legacy per-query MAP filters a chunk by the user query, so on a multihop
+# task it drops the terminal "the person who lives in <city> owns X" chunk (it
+# never names the queried person) and surfaces only the intermediate hop -> wrong
+# answer. Extracting every fact about every entity instead lets the reduce chain
+# the hops. Validated live on the multihop subset: legacy 1/5 -> extraction 5/5.
+# One-line revert: set False (restores the legacy per-query map).
+_SEAM_EXTRACTION_MAP = True
 
 # A run of consecutive empty calls '()()...' - the .lower()() decode stutter.
 _DOUBLED_CALL = re.compile(r"\(\)(?:\(\))+")
@@ -412,13 +426,27 @@ class LocalREPL(NonIsolatedEnv):
             return send_one(composed)
 
         # Oversized: map-reduce. Size the per-chunk data budget so the composed
-        # chunk prompt (instruction + envelope + chunk) stays within `rec`.
-        overhead = len(_compose(prompt, "", "Text"))
+        # chunk prompt (MAP instruction + envelope + chunk) stays within `rec`.
+        # The MAP instruction is what map_reduce actually composes per chunk: the
+        # fixed extraction instruction in extraction_map mode, else the user
+        # prompt plus the sentinel directive. Sizing against the SHORT user
+        # prompt alone undershoots the real envelope and can push a map prompt
+        # past the guard, so account for the instruction map_reduce will use.
+        map_instr = (
+            _EXTRACTION_MAP_INSTRUCTION
+            if _SEAM_EXTRACTION_MAP
+            else prompt + _MAP_SENTINEL_DIRECTIVE
+        )
+        overhead = len(_compose(map_instr, "", "Text"))
         chunk_chars = rec - overhead
-        if chunk_chars <= 0:
-            # The instruction alone exceeds the recommended size; we cannot make
-            # room for any data. Fall through to a single send so the inner guard
-            # reject-with-hints the oversized composed prompt.
+        # Skip map-reduce if either step has no room: the MAP instruction leaves
+        # no budget for chunk data, OR the REDUCE prompt (the user instruction in
+        # extraction_map mode, where the user prompt drives the reduce not the
+        # map) fills the window with no room for partials. Either way a single
+        # send lets the inner guard reject-with-hint the oversized composed prompt.
+        reduce_instr = reduce if reduce is not None else prompt
+        reduce_overhead = len(_compose(reduce_instr, "", "Text"))
+        if chunk_chars <= 0 or reduce_overhead >= rec:
             return send_one(composed)
 
         def _fits(text: str) -> bool:
@@ -432,6 +460,7 @@ class LocalREPL(NonIsolatedEnv):
             chunk_chars=chunk_chars,
             reduce_prompt=reduce,
             overlap_chars=int(chunk_chars * _SUBCALL_CHUNK_OVERLAP_FRAC),
+            extraction_map=_SEAM_EXTRACTION_MAP,
         )
         return result.answer
 
