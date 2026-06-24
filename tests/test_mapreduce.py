@@ -44,8 +44,24 @@ def _len_fits(limit):
 
 
 class TestComposeAndControl:
-    def test_compose_frames_instruction_and_data(self):
-        assert _compose("Q?", "DATA", "Text") == "Q?\n\nText:\nDATA"
+    def test_compose_frames_data_first_instruction_last(self):
+        # Data-first layout: the large, stable data leads; the varying
+        # instruction trails. This is what makes the radix prefix cache reuse
+        # the chunk across sub-calls (ADR-0017). Instruction-first broke the
+        # match at token 0 and caused ~6.4x re-prefill.
+        assert _compose("Q?", "DATA", "Text") == "Text:\nDATA\n\nQ?"
+
+    def test_compose_is_prefix_stable_across_instructions(self):
+        # The cache invariant: for a FIXED chunk, two different instructions
+        # must share a common prefix that already contains the whole chunk, so
+        # the server re-prefills only the short trailing instruction.
+        import os
+
+        a = _compose("first question?", "STABLE_CHUNK_DATA", "Text")
+        b = _compose("a completely different instruction", "STABLE_CHUNK_DATA", "Text")
+        common = os.path.commonprefix([a, b])
+        assert "STABLE_CHUNK_DATA" in common
+        assert common.startswith("Text:\nSTABLE_CHUNK_DATA")
 
     def test_is_control_detects_guard_prefix(self):
         assert _is_control("Sub-call input guard rejected this call: too big")

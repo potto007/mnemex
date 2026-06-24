@@ -29,8 +29,16 @@ _TRUNCATE_NOTE = "\n\n[note: reduce truncated at max depth; some partial results
 
 
 def _compose(instr: str, data: str, label: str = "Text") -> str:
-    """Frame an instruction and a data blob into a single sub-call prompt."""
-    return f"{instr}\n\n{label}:\n{data}"
+    """Frame an instruction and a data blob into a single sub-call prompt.
+
+    Data-first layout (ADR-0017): the large, stable data leads and the varying
+    instruction trails. The served solver's radix/prefix cache matches from
+    token 0, so leading with the chunk lets the SAME chunk be reused across
+    sub-calls (only the short trailing instruction re-prefills). The old
+    instruction-first layout diverged at token 0 and re-prefilled the whole
+    chunk every query (~6.4x re-prefill measured on the multihop bench).
+    """
+    return f"{label}:\n{data}\n\n{instr}"
 
 
 def _is_control(text: str) -> bool:
