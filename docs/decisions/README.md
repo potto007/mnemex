@@ -28,5 +28,6 @@ lives in [rlm-trainer `docs/decisions/README.md`](https://github.com/ClearBridge
 | [0013](0013-dual-instance-weight-shared-solver.md) | Dual-instance weight-shared solver: split orchestrator and sub-calls onto two processes sharing one weights copy | superseded by [0014](0014-single-process-dual-context-solver.md) |
 | [0014](0014-single-process-dual-context-solver.md) | Single-process dual-context solver: one `llama_model` backing two `llama_context` (private KV each) | accepted |
 | [0015](0015-inference-engine-evaluation-vllm-sglang.md) | Inference-engine evaluation: spike vLLM and SGLang as single-engine replacements for the dual-context fork | proposed |
+| [0016](0016-sglang-as-served-solver.md) | SGLang as the served solver: retire the dual-context llama.cpp fork (GATE #1 pass; GATE #2 accuracy A/B pending) | proposed |
 
 `0000-template.md` is the MADR template for new records.
