@@ -14,6 +14,25 @@ This venv uses `uv` (there is NO `pip` binary in `.venv/bin`; use `~/.local/bin/
 
 **Status updates**: Only state facts that tool output confirmed in this session. Do not infer file properties (ignored, tracked, permissions), build outcomes, or side effects you did not directly observe.
 
+## CRITICAL: inference server logging (local-ai promtail -> Loki -> Grafana)
+
+The monitoring rail in **local-ai** runs promtail, which tails a FIXED set of files and ships them to Loki for the Grafana "logs" panels and the `SglangSolverLogsStale` alert. An inference server whose output goes anywhere else is invisible to the dashboard. This is the recurring "no logs on the dash" failure.
+
+**MANDATORY**: whenever you start an inference server ad-hoc, OR write any ad-hoc / benchmark / test / one-off script that starts an inference server as one of its steps (e.g. spinning up the solver/orchestrator the harness drives), that server's stdout AND stderr MUST land in the canonical log for its type:
+
+| Inference server | Canonical log (promtail tails this) |
+| --- | --- |
+| SGLang (`python -m sglang.launch_server ...`) | `/tmp/sglang-server.log` |
+| llama.cpp (`llama-server` / dual-context server) | `/tmp/llama-server.log` |
+
+Satisfy it ONE of these ways:
+- Preferred: launch via `~/src/local-ai/scripts/sglang-launch.sh ARGS...`, a drop-in for `python -m sglang.launch_server ARGS...` that tees stdout+stderr to `/tmp/sglang-server.log` no matter what else you redirect.
+- Or tee/append yourself: `<launch> 2>&1 | tee -a /tmp/sglang-server.log` (or `>> /tmp/sglang-server.log 2>&1`).
+
+**MUST NOT** point an inference server's output at ONLY a private, per-run, or scratchpad file (e.g. `> /tmp/sglang-bench.log`, `> .../scratchpad/run.log`). promtail does not tail those, so the logs panel goes dark and the stale-logs alert fires. A per-run file is fine ONLY in addition to the canonical log (the wrapper tees to both).
+
+Source of truth lives in local-ai: `monitoring/promtail/promtail.yml` (tailed paths), `scripts/sglang-launch.sh` (the wrapper).
+
 ## llama-server (the harness's served solver model): diagnosing endpoint timeouts
 
 The WSL2 llama-server on localhost:8080 (gemma-4 GGUFs) serves **Gnosis** - our custom model FAMILY trained to operate in the **RLM pattern** inside the REPL the prehend harness provides; the harness drives one as its **solver/orchestrator**. Each Gnosis model is a domain specialty named `Gnosis-<Specialty>-<version>`; current = **Gnosis-MedPolicy-13** (`gemma-4-12b-it-sft-kb-v13-sft`). Use bare "Gnosis" only for the family, never bare "v13", and **NEVER call a Gnosis model "teacher"/"student"** (those apply ONLY to training-trajectory generation in rlm-trainer). [HF packaging convention in auto-memory `reference_gnosis-model-name`: org `gnosis-lm`, one repo per specialty, version as a tag.] When a run hitting this server times out (`ConnectTimeout`/`APITimeoutError`) but `curl`/another process to the "same" endpoint works and the server log shows `all slots are idle`:
