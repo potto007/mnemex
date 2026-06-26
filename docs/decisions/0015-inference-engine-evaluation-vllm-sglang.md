@@ -96,14 +96,39 @@ Spike protocol (both engines), gated:
   the plain-multihop tasks that time out on the dual-context fork now COMPLETE.
   Rerun the plain-multihop A/B against the dual-context baseline.
 
-Direction if a spike passes: **lean SGLang** for the RLM many-shared-prefix fit
-(RadixAttention auto-dedupes exactly the orchestrator-prefix + shared-sub-call
-pattern; up to ~6.4x on shared-prefix workloads), with **vLLM as the fallback**
-if SM_120 maturity blocks SGLang on the 5090. If the 12B-unified bug (#44494)
-blocks vLLM now, re-evaluate vLLM in ~4-6 weeks when unified support stabilizes
-into a stable release. A passing spike should be ratified by a FOLLOW-UP ADR that
-supersedes [ADR-0013](0013-dual-instance-weight-shared-solver.md) and
+Direction if a spike passes: originally **lean SGLang** for the RLM
+many-shared-prefix fit (RadixAttention auto-dedupes exactly the
+orchestrator-prefix + shared-sub-call pattern; up to ~6.4x on shared-prefix
+workloads), with vLLM as the fallback. **See the update below - this lean has
+since flipped to vLLM-first.** A passing spike should be ratified by a FOLLOW-UP
+ADR that supersedes [ADR-0013](0013-dual-instance-weight-shared-solver.md) and
 [ADR-0014](0014-single-process-dual-context-solver.md).
+
+### Update (2026-06-26): lean flipped to vLLM-first
+
+The two facts that made vLLM the *fallback* both resolved within days of writing
+this ADR, so the spike order is now **vLLM-first, SGLang as the alternative**:
+
+- **The vLLM blocker is gone.** vLLM **v0.23.0** (released 2026-06-15) ships
+  encoder-free **Gemma 4 Unified** support (PR #44429) and **Gemma 4 MTP**
+  (#43241) in a STABLE release - no longer nightly-only, and the #44494 /
+  transformers-pin / spec-decoding concerns that gated it are resolved or moot
+  (we do not run spec decoding). It also landed **Marlin MoE on SM 12.x** (#40923),
+  improving the consumer-Blackwell path.
+- **The host caught up.** WSL2 was upgraded to **2.7.8** (CUDA graphs unblocked),
+  and FlashInfer on SM_120 looks viable.
+- **TurboQuant KV is vLLM-only.** The original KV-quantization goal (TurboQuant,
+  arXiv:2504.19874) has a vLLM integration and NO SGLang equivalent, so vLLM also
+  matches the stated KV-quant direction; SGLang would force the native
+  `fp4_e2m1`/`fp8_e4m3` substitute.
+- **Lower setup friction.** vLLM skips the SGLang `main` + pinned-transformers +
+  SM_120 `trtllm_mha` workaround dance.
+
+Caveat unchanged: this does NOT eliminate the attention-backend question (vLLM also
+uses FlashInfer/FlashAttention on Blackwell) or Gate #1 (clean load + sustained
+decode on the 5090/WSL2 must still be proven by running it). Net: spike **vLLM
+first** on v0.23.0 with Python 3.13.12; fall back to SGLang only if vLLM fails
+Gate #1 on this box.
 
 ### Consequences
 
@@ -172,7 +197,8 @@ supersedes [ADR-0013](0013-dual-instance-weight-shared-solver.md) and
   orchestrator vs CoT-off worker is one knob, not two servers.
 - Good, because the 5090/WSL2/CUDA-graphs path is community-validated on a recent
   stack (vLLM 0.17.1, CUDA 12.8, WSL2 2.7.0, ~140 tok/s with CUDA graphs).
-- Bad (HIGHEST RISK), because the 12B-Unified arch
+- ~~Bad (HIGHEST RISK)~~ **RESOLVED in v0.23.0 (2026-06-15) - see the Update under
+  Decision Outcome.** As written this was: the 12B-Unified arch
   (`Gemma4UnifiedForConditionalGeneration`) is NIGHTLY-ONLY (landed in PR #44429,
   not in any stable release) with an OPEN shape-mismatch bug (#44494,
   `mat1/mat2 ... 2048x4096 and 8192x3840` during memory profiling) and a
