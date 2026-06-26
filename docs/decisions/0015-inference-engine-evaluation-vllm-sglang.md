@@ -221,6 +221,41 @@ supersedes [ADR-0013](0013-dual-instance-weight-shared-solver.md) and
   supported (#5507, #3265), so the E4B distiller is a second / on-demand process
   with a hand-split `--mem-fraction-static`.
 
+## Future work: scaling the SGLang frontend GIL (not pressing)
+
+If, after migrating, the Python frontend becomes the limiter under the concurrent
+RLM sub-call load, the lever is **process-level parallelism, NOT free-threaded
+Python**. Captured here so it is not re-derived later.
+
+- **Free-threaded CPython is a dead end for this stack right now.** PyTorch DROPPED
+  CPython 3.13t (no cp313t CUDA/CPU/ROCm wheels in nightlies or the 2.13 release);
+  the stable free-threaded variant going forward is **3.14t**. But the inference
+  stack is not 3.14t-ready: SGLang free-threading is an open RFC (#22889, a phased
+  plan, not shipped), torch 3.14t support is fresh (#156856, source builds likely),
+  and FlashInfer/Triton status is unconfirmed. Worse, on a free-threaded build any
+  C-extension not explicitly marked free-thread-safe (`Py_mod_gil =
+  Py_MOD_GIL_NOT_USED`) **silently re-enables the GIL on import** - so a naive
+  flash-attn/torch recompile on 3.14t pays the full compatibility cost and yields a
+  GIL'd interpreter anyway. Revisit only once SGLang #22889 lands and torch ships
+  stable 3.14t CUDA wheels.
+- **The shipping lever is SGLang's multi-process frontend.** SGLang already
+  decomposes into separate processes over ZMQ specifically "to avoid Python GIL
+  contention": the Scheduler (GPU/model execution) is its own process, so inference
+  never contends on the frontend GIL. The residual GIL bottleneck is the single
+  `TokenizerManager` doing tok/detok + request dispatch/serialization (confirmed
+  GIL-bound at high concurrency, #29367). Fan it out with
+  **`--tokenizer-worker-num N` / `--detokenizer-worker-num N`** (optionally
+  `SGLANG_RUST_SERVER=1` for the Rust HTTP frontend). For a fully non-Python hot
+  path, **`sgl-router`** (`pip install sglang-router`, Rust load balancer with
+  native Rust tokenization/reasoning/tool-call parsing) fronts N worker processes.
+- **Profile before tuning.** The bottleneck this evaluation actually measured was
+  DECODE throughput (the dual-context co-batching loss), not the frontend GIL; on a
+  single-GPU single-engine SGLang the Scheduler is one process regardless, so
+  `--tokenizer-worker-num` only helps if the frontend is the real limiter. Confirm
+  with `py-spy` on the `TokenizerManager` under a real concurrent run first. Gotcha:
+  `--skip-tokenizer-init` (pre-tokenized path) forces worker_num=1 (#29367),
+  silently disabling the fan-out - relevant only if the client pre-tokenizes.
+
 ## More Information
 
 - Relates to and (on a passing spike) would supersede
@@ -256,3 +291,10 @@ Key sources:
   https://github.com/sgl-project/sglang/issues/3265
 - SGLang vs vLLM: https://particula.tech/blog/sglang-vs-vllm-inference-engine-comparison ,
   https://techsy.io/en/blog/vllm-vs-sglang
+- Frontend GIL scaling: SGLang multi-process arch (DeepWiki) https://deepwiki.com/sgl-project/sglang/3.1-multi-process-architecture-and-ipc ;
+  TokenizerManager GIL bottleneck / `--tokenizer-worker-num` #29367 https://github.com/sgl-project/sglang/issues/29367 ,
+  #13400 https://github.com/sgl-project/sglang/issues/13400 ;
+  sgl-router (Rust) https://pypi.org/project/sglang-router/
+- Free-threaded Python: PyTorch dropping 3.13t (move to 3.14t) https://dev-discuss.pytorch.org/ ;
+  SGLang free-threaded RFC #22889 https://github.com/sgl-project/sglang/issues/22889 ;
+  PyTorch 3.14 support #156856 https://github.com/pytorch/pytorch/issues/156856
