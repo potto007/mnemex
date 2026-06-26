@@ -106,6 +106,7 @@ class MemoryHarness:
         learn_from_failure: bool = False,
         max_inject_negatives: int = 2,
         context_signature: bool = False,
+        freeze_retrieval: bool = False,
         observer: MemoryObserver | None = None,
     ) -> None:
         self.solver = solver
@@ -121,6 +122,13 @@ class MemoryHarness:
         # question embeds at cosine ~= 1.0 regardless of document). Default off
         # keeps the embedding-only path byte-identical for other consumers.
         self.context_signature = context_signature
+        # Write-only cold baseline: when True, _retrieve short-circuits to empty so
+        # NO experience is injected (every solve is a true first-exposure), while
+        # _collect still writes distilled experiences to the bank. The cold/warm
+        # eval sets this for its cold phase so later cold tasks can't read memories
+        # written by earlier ones, yet the bank still ends populated for the warm
+        # phase. Default off keeps the standard read+write path.
+        self.freeze_retrieval = freeze_retrieval
         self.observer = observer or NullObserver()
         # Contrastive failure channel (ADR-0010): when True, collect_pending(False)
         # distills a WRONG solve into a negative guard-rule entry instead of
@@ -236,6 +244,9 @@ class MemoryHarness:
         a real retrieval failure from a clean miss, and ``seconds`` is the
         embed+search wall time, both for the observer.
         """
+        if self.freeze_retrieval:
+            # Write-only cold baseline: skip retrieval entirely (clean miss).
+            return [], [], False, 0.0
         t0 = time.perf_counter()
         try:
             res = retrieve(

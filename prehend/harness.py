@@ -112,6 +112,13 @@ class MemoryConfig:
     # embedding alone cannot tell two same-question, different-document tasks
     # apart). Default off keeps the embedding-only path byte-identical.
     context_signature: bool = False
+    # Write-only cold baseline: when True, the memory layer distills and writes
+    # experiences as usual but injects NONE (retrieval short-circuits to empty),
+    # so every solve is a true first-exposure. The cold/warm eval sets this for
+    # its cold phase so a later cold task can't read memories written by earlier
+    # cold tasks, while the bank still ends populated for the warm phase. Default
+    # off keeps the standard read+write path.
+    freeze_retrieval: bool = False
     # Telemetry sink for retrieve/collect events. Pass
     # prehend.metrics.memory_observer() to emit the localai_prehend_memory_*
     # Prometheus series; None -> MemoryHarness installs a no-op NullObserver, so
@@ -334,6 +341,7 @@ class Harness:
                 learn_from_failure=memory.learn_from_failure,
                 max_inject_negatives=memory.max_inject_negatives,
                 context_signature=memory.context_signature,
+                freeze_retrieval=memory.freeze_retrieval,
                 observer=memory.observer,
                 **tight,
             )

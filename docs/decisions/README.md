@@ -33,5 +33,7 @@ lives in [rlm-trainer `docs/decisions/README.md`](https://github.com/ClearBridge
 | [0018](0018-extraction-map-for-multihop-chaining.md) | Query-independent extraction MAP for multihop chaining | accepted |
 | [0019](0019-fp8-e4m3-kv-cache-for-gemma4-solver.md) | fp8_e4m3 (not fp8_e5m2) for the gemma4 v13 KV cache | accepted |
 | [0020](0020-entry-id-includes-provenance.md) | Experience id keys on (question, provenance) so failure guards and success recipes coexist (amends 0011) | accepted |
+| [0021](0021-vllm-as-served-solver.md) | vLLM 0.23.0 as the served solver for v13 (TRITON_ATTN, fp8_e4m3 KV, max-model-len 65536); supersedes 0016 | accepted |
+| [0022](0022-cold-baseline-via-frozen-retrieval-and-persistent-bank.md) | Cold baseline = frozen retrieval (not an empty bank); the memory bank is persistent and versioned | accepted |
 
 `0000-template.md` is the MADR template for new records.

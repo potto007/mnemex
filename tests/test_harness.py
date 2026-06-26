@@ -216,6 +216,26 @@ class TestHarnessMemory:
         ))
         assert h.solver.observer is sentinel
 
+    def test_memory_freeze_retrieval_threads_to_harness(self, tmp_path):
+        # The cold/warm eval drives the memory layer only via Harness(memory=...);
+        # freeze_retrieval must thread through so the cold phase can write-without-
+        # retrieving (true first-exposure baseline).
+        h = _h(memory=MemoryConfig(
+            bank_dir=str(tmp_path / "bank"),
+            embed_model="bge-m3", reflect_model="m",
+            embed_url="http://localhost:8084/v1",
+            freeze_retrieval=True,
+        ))
+        assert h.solver.freeze_retrieval is True
+
+    def test_memory_freeze_retrieval_defaults_false(self, tmp_path):
+        h = _h(memory=MemoryConfig(
+            bank_dir=str(tmp_path / "bank"),
+            embed_model="bge-m3", reflect_model="m",
+            embed_url="http://localhost:8084/v1",
+        ))
+        assert h.solver.freeze_retrieval is False
+
     def test_memory_observer_defaults_to_none_field(self, tmp_path):
         # Default config carries no observer; MemoryHarness then installs its own
         # NullObserver (no-op), so the no-metrics path is unaffected.

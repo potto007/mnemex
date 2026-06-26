@@ -298,3 +298,37 @@ def test_factory_defaults_preserve_correct_only(tmp_path):
     )
     assert harness.learn_from_failure is False
     assert harness.max_inject_negatives == 2
+
+
+# --- freeze_retrieval threading (write-only cold baseline) ---
+
+def test_factory_threads_freeze_retrieval(tmp_path):
+    harness = build_memory_harness(
+        FakeSolver(), tmp_path / "mem",
+        embed_backend=ConstBackend(),
+        reflect_fn=_reflect_fn({"key_insight": "k"}),
+        freeze_retrieval=True,
+    )
+    assert harness.freeze_retrieval is True
+
+
+def test_factory_freeze_retrieval_defaults_false(tmp_path):
+    harness = build_memory_harness(
+        FakeSolver(), tmp_path / "mem",
+        embed_backend=ConstBackend(),
+        reflect_fn=_reflect_fn({"key_insight": "k"}),
+    )
+    assert harness.freeze_retrieval is False
+
+
+def test_from_config_threads_freeze_retrieval(monkeypatch, tmp_path):
+    from prehend.memory.factory import build_memory_harness_from_config
+    seen = {}
+    _patch_backends(monkeypatch, seen)
+    harness = build_memory_harness_from_config(
+        FakeSolver(), tmp_path / "mem",
+        base_url="http://localhost:8080/v1",
+        embed_model="bge-m3", reflect_model="gemma",
+        freeze_retrieval=True,
+    )
+    assert harness.freeze_retrieval is True
