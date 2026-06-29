@@ -49,6 +49,16 @@ class Defaults:
     # entirely (server-side default RNG), keeping prior behavior byte-identical.
     seed: int | None = None
     subcall_enable_thinking: bool = False
+    # Thinking toggle for the top-level orchestrator RLM call (distinct from the
+    # sub-call one above). Gemma has no thinking mode so this was implicit; a
+    # thinking-capable base (Qwen3 et al.) defaults thinking ON in its chat
+    # template, which would wrap the orchestrator's REPL actions in <think> and
+    # break parsing / burn the iteration budget. Default False keeps the
+    # orchestrator deterministic and non-thinking, matching the Gemma path.
+    # Rides via chat_template_kwargs, ignored by templates that don't reference
+    # enable_thinking (e.g. Gemma), so the existing served-solver path is
+    # byte-identical.
+    rlm_enable_thinking: bool = False
     max_concurrent_subcalls: int = 4
     soft_timeout_pct: float | None = None
     # Sub-model context window (tokens) for the input-size guard. None lets the
@@ -61,6 +71,15 @@ class Defaults:
     # did (ADR-0012), so each sub-call is budgeted against the FULL resolved pool
     # (the per-request context-length cap). Default False keeps the llama.cpp path.
     dynamic_kv_pool: bool = False
+    # Generation cap for the ROOT orchestrator turn (tokens). Unset, the root rides
+    # DEFAULT_MAX_DECODE_TOKENS=8192 (lm_handler), and a degenerate repeat/stutter
+    # iteration runs to that ceiling (~8192 tok ~= 105s, 0 code blocks, no progress)
+    # before the iteration-boundary timeout can fire - the dominant slow-task cost
+    # in the gnosis-0.2 triage sweep (RCA 2026-06-28). 2048 is ~6-10x a legit root
+    # turn (corpus/icd answers ~200-330 tok) so it ONLY bounds degenerate stutters;
+    # sub-calls are untouched via root_max_tokens (NOT max_decode_tokens), so
+    # extraction-map sub-calls keep the 8192 headroom (ADR-0018). ~105s -> ~26s.
+    root_max_tokens: int = 2048
 
 
 VETTED = Defaults()
@@ -263,7 +282,10 @@ class Harness:
         backend_kwargs = {
             "model_name": model, "base_url": base_url, "api_key": api_key,
             "max_retries": d.max_retries, "stream": d.stream,
-            "default_extra_body": dict(solve_extra_body),
+            "default_extra_body": {
+                **solve_extra_body,
+                "chat_template_kwargs": {"enable_thinking": d.rlm_enable_thinking},
+            },
         }
         subcall_kwargs = dict(backend_kwargs)
         subcall_kwargs["base_url"] = eff_subcall_url
@@ -289,6 +311,7 @@ class Harness:
             max_timeout=timeout,
             max_concurrent_subcalls=self.subcall_runtime.slots,
             soft_timeout_pct=d.soft_timeout_pct,
+            root_max_tokens=d.root_max_tokens,
             logger=logger,
             verbose=False,
         )
