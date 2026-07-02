@@ -12,7 +12,8 @@ This venv uses `uv` (there is NO `pip` binary in `.venv/bin`; use `~/.local/bin/
 
 **IMPORTANT**: NEVER use the "em dash". If a dash is appropriate for a situation, use the regular dash.
 
-**Status updates**: Only state facts that tool output confirmed in this session. Do not infer file properties (ignored, tracked, permissions), build outcomes, or side effects you did not directly observe.
+## Status updates
+Only state facts that tool output confirmed in this session. Do not infer file properties (for example: ignored, tracked, permissions), build outcomes, or side effects you did not directly observe.
 
 ## CRITICAL: inference server logging (local-ai promtail -> Loki -> Grafana)
 
@@ -54,7 +55,6 @@ Ops: kill the server by explicit PID (NEVER `pkill -f llama-server` - self-match
 **ABSOLUTE RULES**:
 1. **NEVER save working files, text/mds and tests to the root folder**
 2. ALWAYS organize files in appropriate subdirectories
-3. **USE CLAUDE CODE'S TASK TOOL** for spawning agents concurrently, not just MCP
 
 ## Git interactions
 
@@ -62,9 +62,23 @@ Ops: kill the server by explicit PID (NEVER `pkill -f llama-server` - self-match
 
 Commit early, commit often.
 
+### Git commits
+- **Commit Style**: Use the Conventional Commits specification.
+- **Length Rule**: Strictly enforce a 50-character limit for the subject line.
+- **Formatting**: Keep messages succinct. Never include a body summary or bullet points unless explicitly requested.
+- **Grammar**: Use the imperative mood (e.g., "fix", "add", "refactor" instead of "fixed", "adds").
+
 For commits related to a Github issue, add: `git commit --trailer "Github-Issue:#<number>"` where <number> is the Github Issue number.
 
 When adding tags, if not given an explicit tag name or version, use `git tag --sort=-v:refname` with the Read tool (NOT piped through head) to determine most recent version. NEVER refer to packages/shared/src/version.ts or packages/mobile/app.json for version lookups.
+
+## Code Style
+- Python: Follow PEP 8, use type hints (mypy strict mode)
+- Formatting: Ruff (line length 88)
+- Commenting: Write few or no comments; code should be self-explanatory; dual-audience commenting at maximum density
+- FastAPI: Async patterns for all I/O, Mangum for Lambda integration
+- Terraform: snake_case naming, tag all resources (environment, project, managed_by)
+- Never use `@ts-ignore` or hardcode credentials
 
 <!-- code-review-graph MCP tools -->
 ## MCP Tools: code-review-graph
